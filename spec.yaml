@@ -1,9 +1,9 @@
 schemaVersion: "2"
 kind: mixin
 name: ij-lsp
-version: 0.2.0
+version: 0.3.0
 displayName: Java and Kotlin by IntelliJ IDEA
-description: Runs code-server with JetBrains' IntelliJ-powered Java and Kotlin language server extension in the sandbox workspace.
+description: Adds IntelliJ-powered Java and Kotlin queries for the agent plus a code-server editor for the user.
 sourceURL: https://github.com/shelajev/ij-lsp-sbx-kit
 licenses:
   - Apache-2.0
@@ -96,12 +96,18 @@ setup:
 
 agentInstructions:
   content: |
-    # ij-lsp: read this before investigating Java or Kotlin language tooling
+    # IntelliJ tools are available: use `ij` first
 
-    **Important:** this sandbox already has the `JetBrains.intellij-server` extension running inside code-server. It is an editor-only integration, not an MCP server, `jdtls` process, or agent-callable LSP tool.
+    This sandbox exposes JetBrains IntelliJ Java/Kotlin intelligence through the agent-facing `ij` command. Run `ij status` first. Do not search MCP catalogs, the PATH, running processes, or workspace configuration for another LSP or `jdtls`.
 
-    When the user mentions IntelliJ, LSP, Java/Kotlin intelligence, or opening the editor, first run `ij-lsp-status`. Do not search MCP catalogs, workspace configuration, running processes, or the PATH for another language server.
+    Prefer these semantic queries over text-only guesses:
 
-    The extension provides IntelliJ completion, navigation, analysis, refactoring, and formatting in the browser for Java and Kotlin projects using Maven, Gradle, or Bazel. Initial project import and indexing may take time. Tell the user to run `sbx ports <sandbox-name>` on the host and open the port labeled `intellij-code-server`.
+    - `ij symbols <query>` searches workspace symbols.
+    - `ij outline <file>` lists document symbols.
+    - `ij definition|type-definition|implementation|references|hover <file> <line> <column>` queries a 1-based source position.
+    - `ij diagnostics <file>` returns current IntelliJ diagnostics.
+    - `ij code-actions <file> <line> <column>` and `ij rename-preview <file> <line> <column> <new-name>` return previews only; they never edit files.
 
-    The terminal agent cannot invoke IntelliJ diagnostics, references, or refactorings programmatically. State that limitation once if relevant, then continue using repository search and the project's normal build, test, lint, and formatting commands. Do not claim that you queried IntelliJ. Service logs are at `/tmp/ij-lsp-code-server.log`.
+    Results are JSON. If `ij status` says the bridge is not ready, ask the user to open the `intellij-code-server` URL once; code-server starts workspace extensions when its browser workbench connects. Empty results can mean Maven, Gradle, or Bazel import and indexing are still running, so check `ij status` and `/tmp/ij-lsp-code-server.log` before concluding that no symbol exists. Only claim IntelliJ-backed results after a successful `ij` response. Continue validating changes with the project's normal build, tests, lint, and formatting.
+
+    The same IntelliJ integration is available to the user in code-server. Tell them to run `sbx ports <sandbox-name>` on the host and open the port labeled `intellij-code-server`. JetBrains' initial region, license, and activation flow still requires the user in the browser.

@@ -1,0 +1,88 @@
+#!/bin/sh
+set -eu
+
+socket=/tmp/ij-lsp-agent.sock
+
+usage() {
+  cat <<'EOF'
+Usage:
+  ij status
+  ij symbols <query>
+  ij outline <file>
+  ij diagnostics <file>
+  ij definition <file> <line> <column>
+  ij type-definition <file> <line> <column>
+  ij implementation <file> <line> <column>
+  ij references <file> <line> <column>
+  ij hover <file> <line> <column>
+  ij code-actions <file> <line> <column>
+  ij rename-preview <file> <line> <column> <new-name>
+
+Lines and columns are 1-based. Results are JSON. Query operations never edit files.
+EOF
+}
+
+wait_for_bridge() {
+  attempts=0
+  while [ ! -S "$socket" ] && [ "$attempts" -lt 5 ]; do
+    sleep 1
+    attempts=$((attempts + 1))
+  done
+  if [ ! -S "$socket" ]; then
+    printf '%s\n' 'ERROR: IntelliJ agent bridge is not ready.' >&2
+    printf '%s\n' "Open the sandbox's intellij-code-server URL once, then retry. Find it with: sbx ports <sandbox-name>" >&2
+    /home/agent/.local/bin/ij-lsp-status >&2 || true
+    return 1
+  fi
+}
+
+request() {
+  endpoint=$1
+  shift
+  wait_for_bridge
+  curl --fail-with-body --silent --show-error --unix-socket "$socket" \
+    --get "http://localhost$endpoint" "$@"
+}
+
+command=${1:-help}
+if [ "$#" -gt 0 ]; then
+  shift
+fi
+
+case "$command" in
+  status)
+    [ "$#" -eq 0 ] || { usage >&2; exit 2; }
+    request /v1/status
+    ;;
+  symbols)
+    [ "$#" -eq 1 ] || { usage >&2; exit 2; }
+    request /v1/symbols --data-urlencode "query=$1"
+    ;;
+  outline|diagnostics)
+    [ "$#" -eq 1 ] || { usage >&2; exit 2; }
+    request "/v1/$command" --data-urlencode "file=$1"
+    ;;
+  definition|type-definition|implementation|references|hover|code-actions)
+    [ "$#" -eq 3 ] || { usage >&2; exit 2; }
+    request "/v1/$command" \
+      --data-urlencode "file=$1" \
+      --data-urlencode "line=$2" \
+      --data-urlencode "column=$3"
+    ;;
+  rename-preview)
+    [ "$#" -eq 4 ] || { usage >&2; exit 2; }
+    request /v1/rename-preview \
+      --data-urlencode "file=$1" \
+      --data-urlencode "line=$2" \
+      --data-urlencode "column=$3" \
+      --data-urlencode "newName=$4"
+    ;;
+  help|-h|--help)
+    usage
+    ;;
+  *)
+    printf 'Unknown command: %s\n\n' "$command" >&2
+    usage >&2
+    exit 2
+    ;;
+esac

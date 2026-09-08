@@ -1,8 +1,12 @@
 #!/bin/sh
 set -u
 
-printf '%s\n' 'ij-lsp is a JetBrains IntelliJ editor integration inside code-server.'
-printf '%s\n' 'It is not an MCP server, jdtls process, or agent-callable LSP tool.'
+printf '%s\n' 'ij-lsp provides IntelliJ intelligence through code-server and the agent-facing ij command.'
+if [ -S /tmp/ij-lsp-agent.sock ]; then
+  printf '%s\n' 'READY: the agent bridge is available. Run: ij status'
+else
+  printf '%s\n' 'NOT READY: the agent bridge socket has not appeared yet.'
+fi
 printf '\n%s\n' 'Installed code-server extensions:'
 
 if command -v code-server >/dev/null 2>&1; then

@@ -7,8 +7,10 @@ extension preinstalled. It adds IntelliJ-powered completion, navigation, code
 analysis, refactoring, and formatting for Maven, Gradle, and Bazel projects
 alongside any sandbox agent.
 
-The language intelligence is editor-side. This kit does not add LSP operations
-as callable tools to Codex, Claude, or another terminal agent.
+The agent gets the `ij` command for precise IntelliJ-backed symbol, definition,
+reference, hover, diagnostics, code-action, and rename-preview queries. The user
+gets the same intelligence in the browser editor. You do not need to operate the
+underlying Language Server Protocol.
 
 ## Quick start
 
@@ -57,10 +59,11 @@ sbx exec <sandbox-name> -- cat /tmp/ij-lsp-code-server.log
 For a new sandbox, tell the agent:
 
 ```text
-This sandbox has the ij-lsp kit. Run `ij-lsp-status` now. Do not search for an
-MCP server, jdtls, or another LSP process: JetBrains.intellij-server is an
-editor-only code-server extension. Report its status, then tell me how to open
-the intellij-code-server port.
+Use the installed IntelliJ tools for this Java/Kotlin task. Run `ij status`
+first, then use `ij symbols`, `ij definition`, `ij references`, `ij hover`, and
+`ij diagnostics` whenever they are relevant. Do not search for MCP, jdtls, or
+another LSP. If the bridge is not ready, ask me to open code-server once.
+Summarize the IntelliJ results and continue the task.
 ```
 
 For a sandbox created with an older kit revision, use the longer prompt in the
@@ -85,19 +88,31 @@ sbx create --name ij-lsp-test codex \
   ~/my-jvm-project
 ```
 
-Confirm the extension and web service inside it:
+Confirm the agent bridge, extension, and web service inside it:
 
 ```console
-sbx exec ij-lsp-test -- ij-lsp-status
+sbx exec ij-lsp-test -- ij status
 sbx exec ij-lsp-test -- code-server --list-extensions --show-versions
 sbx exec ij-lsp-test -- curl -fsSI http://127.0.0.1:8080/
 sbx ports ij-lsp-test
 ```
 
-The extension list should contain `jetbrains.intellij-server@<version>`. Open
-the host port labeled `intellij-code-server`, complete JetBrains' first-run
-license flow, then open a Java or Kotlin source file. After project import and
-indexing, verify completion, navigation, and diagnostics in the editor.
+The extension list should contain `jetbrains.intellij-server@<version>` and
+`shelajev.intellij-agent-bridge@0.1.0`. Open the host port labeled
+`intellij-code-server`, complete JetBrains' first-run license flow, then open a
+Java or Kotlin source file. Opening code-server also starts its workspace
+extension host and the local agent bridge. After project import and indexing,
+test an agent query against a real source position:
+
+```console
+sbx exec ij-lsp-test -- ij outline src/main/java/example/App.java
+sbx exec ij-lsp-test -- ij diagnostics src/main/java/example/App.java
+sbx exec ij-lsp-test -- ij definition src/main/java/example/App.java 20 15
+```
+
+All lines and columns are 1-based. Queries return structured JSON and never
+modify files. `ij code-actions` and `ij rename-preview` expose proposed edits
+for the agent to review and apply through its normal file-editing workflow.
 
 If setup or indexing cannot reach a host, inspect the sandbox policy log:
 
@@ -129,17 +144,15 @@ SBX_AGENT=claude ./run.sh ij-lsp-claude ~/my-jvm-project
 
 ### Existing-sandbox prompt
 
-Kit files and agent memory are applied when a sandbox is created. If you cannot
-recreate an older demo sandbox, paste this into its agent session:
+Kit files and agent memory are applied when a sandbox is created. An older
+sandbox can continue using the browser editor, but it does not contain the new
+agent bridge. Create a new named sandbox to get `ij`, without deleting the old
+one:
 
-```text
-Stop searching for MCP servers, jdtls, or a standalone LSP process. This
-sandbox's IntelliJ intelligence runs in the JetBrains.intellij-server
-code-server extension on container port 8080. It is editor-only, not a tool you
-can invoke. Verify it with `code-server --list-extensions --show-versions` and
-`curl -fsSI http://127.0.0.1:8080/`. Then tell me to run `sbx ports
-<sandbox-name>` and open the port named `intellij-code-server`. Continue your
-own work with repository search and the Maven/Gradle/Bazel build and tests.
+```console
+sbx create --name ij-lsp-agent codex \
+  --kit "git+https://github.com/shelajev/ij-lsp-sbx-kit.git" \
+  ~/my-jvm-project
 ```
 
 ## Versioning
@@ -186,11 +199,15 @@ for the sandboxed agent. At sandbox creation, Docker writes mixin instructions
 to `kits-memory/ij-lsp.md` and links that file from the base agent's main memory
 file.
 
-The note tells the agent to run `ij-lsp-status` immediately instead of searching
-for MCP resources, `jdtls`, workspace configuration, or a standalone process.
-It also explains what the editor provides, how to find its port and logs, and
-that the terminal agent cannot call this LSP directly. An agent-callable
-integration would require a separate LSP-to-MCP bridge.
+The note tells the agent to run `ij status` immediately instead of searching for
+MCP resources, `jdtls`, workspace configuration, or a standalone process. It
+documents every semantic query and reminds the agent that code-action and rename
+operations are preview-only.
+
+The `ij` command talks over a user-only Unix socket to the bundled IntelliJ Agent
+Bridge extension. The bridge invokes code-server's standard language-provider
+API, so the browser and agent reuse the same JetBrains extension and project
+index rather than launching competing language servers.
 
 ## Compatibility
 
