@@ -54,11 +54,13 @@ sbx create --name ij-lsp-test codex \
 ```
 
 The default is `false`. Passing `true` confirms that you accept the agreement
-shipped in the downloaded JetBrains server bundle. It downloads the verified
-bundle and starts IntelliJ during sandbox startup.
+shipped in the downloaded JetBrains server bundle and starts IntelliJ during
+sandbox startup, so project indexing can begin before the agent asks a question.
 
-The first `ij` invocation downloads the approximately 1 GB IntelliJ server
-bundle selected by the installed JetBrains extension and verifies its SHA-256.
+Sandbox creation downloads the approximately 1 GB IntelliJ server bundle
+selected by the installed JetBrains extension and verifies its SHA-256. This
+makes the agent's first `ij` invocation fast and avoids flooding its transcript
+with download progress.
 Without the opt-in argument, JetBrains requires interactive acceptance of the
 agreement bundled with that server:
 
@@ -176,9 +178,10 @@ onboarding and activation flow. Opening it is never required for agent queries.
 
 ## How it works
 
-`ij status` reads `server-bundle.json` from the installed JetBrains extension,
-downloads that exact platform bundle, verifies the published checksum, and
-requires explicit acceptance whenever the bundled agreement changes.
+During sandbox creation, `ij-server-install` reads `server-bundle.json` from the
+installed JetBrains extension, downloads that exact platform bundle, and
+verifies the published checksum. `ij` requires explicit acceptance whenever
+the bundled agreement changes.
 
 After acceptance, `ij` launches `intellij-server --stdio` directly. A small
 local bridge translates the documented command set into Language Server

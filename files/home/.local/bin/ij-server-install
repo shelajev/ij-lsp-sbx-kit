@@ -55,7 +55,7 @@ trap 'rm -rf -- "$tmp_dir"' EXIT HUP INT TERM
 archive="$tmp_dir/$archive_name"
 
 printf 'Downloading IntelliJ language server %s (about 1 GB)...\n' "$version" >&2
-curl --fail --location --show-error --progress-bar "$url" -o "$archive"
+curl --fail --location --show-error --silent "$url" -o "$archive"
 printf '%s  %s\n' "$sha256" "$archive" | sha256sum -c - >&2
 mkdir -p "$tmp_dir/unpacked"
 tar -xzf "$archive" -C "$tmp_dir/unpacked"
