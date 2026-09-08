@@ -1,0 +1,6 @@
+{
+  "url": "https://download.jetbrains.com/language-server/test/intellij-server-test.tar.gz",
+  "version": "test",
+  "archiveName": "intellij-server-test.tar.gz",
+  "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+}

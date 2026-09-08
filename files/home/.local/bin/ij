@@ -1,12 +1,16 @@
 #!/bin/sh
 set -eu
 
-socket=/tmp/ij-lsp-agent.sock
+state_dir=${IJ_LSP_STATE_DIR:-"$HOME/.local/share/ij-lsp"}
+socket=${IJ_LSP_SOCKET:-/tmp/ij-lsp-agent.sock}
+daemon="$HOME/.local/lib/ij-lsp/daemon.js"
 
 usage() {
   cat <<'EOF'
 Usage:
   ij status
+  ij wait [seconds]
+  ij accept-license
   ij symbols <query>
   ij outline <file>
   ij diagnostics <file>
@@ -19,40 +23,111 @@ Usage:
   ij rename-preview <file> <line> <column> <new-name>
 
 Lines and columns are 1-based. Results are JSON. Query operations never edit files.
+VS Code and a browser are not required.
 EOF
 }
 
-wait_for_bridge() {
+find_eula() {
+  find "$state_dir/current" -maxdepth 4 -type f -name EULA.txt -print -quit
+}
+
+accepted_hash() {
+  [ -f "$state_dir/accepted-eula-hash" ] || return 1
+  sed -n '1p' "$state_dir/accepted-eula-hash"
+}
+
+license_hash() {
+  eula=$(find_eula)
+  [ -n "$eula" ] || return 1
+  sha256sum "$eula" | cut -c1-16
+}
+
+install_server() {
+  launcher=$($HOME/.local/bin/ij-server-install)
+  [ -x "$launcher" ] || { printf '%s\n' 'ERROR: installer returned no executable launcher.' >&2; exit 1; }
+}
+
+require_license() {
+  expected=$(license_hash || true)
+  accepted=$(accepted_hash || true)
+  if [ -z "$expected" ] || [ "$accepted" != "$expected" ]; then
+    printf '%s\n' '{"setupRequired":"license","message":"Run interactively: ij accept-license"}'
+    exit 3
+  fi
+  eula_hash=$expected
+}
+
+workspace_root() {
+  if root=$(git rev-parse --show-toplevel 2>/dev/null); then
+    printf '%s\n' "$root"
+  else
+    pwd -P
+  fi
+}
+
+start_daemon() {
+  if [ -S "$socket" ] && curl --fail --silent --unix-socket "$socket" http://localhost/v1/status >/dev/null 2>&1; then
+    return 0
+  fi
+  [ ! -e "$socket" ] || rm -f -- "$socket"
+  root=$(workspace_root)
+  mkdir -p "$state_dir/logs"
+  workspace_id=$(printf '%s' "$root" | sha256sum | cut -c1-16)
+  log="$state_dir/logs/$workspace_id.log"
+  nohup ij-node "$daemon" "$root" "$launcher" "$eula_hash" "$socket" >"$log" 2>&1 &
   attempts=0
-  while [ ! -S "$socket" ] && [ "$attempts" -lt 5 ]; do
+  while [ "$attempts" -lt 60 ]; do
+    if [ -S "$socket" ] && curl --fail --silent --unix-socket "$socket" http://localhost/v1/status >/dev/null 2>&1; then
+      return 0
+    fi
     sleep 1
     attempts=$((attempts + 1))
   done
-  if [ ! -S "$socket" ]; then
-    printf '%s\n' 'ERROR: IntelliJ agent bridge is not ready.' >&2
-    printf '%s\n' "Open the sandbox's intellij-code-server URL once, then retry. Find it with: sbx ports <sandbox-name>" >&2
-    /home/agent/.local/bin/ij-lsp-status >&2 || true
-    return 1
-  fi
+  printf 'ERROR: IntelliJ server did not start. Inspect %s\n' "$log" >&2
+  [ -f "$log" ] && tail -80 "$log" >&2
+  exit 1
 }
 
 request() {
   endpoint=$1
   shift
-  wait_for_bridge
-  curl --fail-with-body --silent --show-error --unix-socket "$socket" \
-    --get "http://localhost$endpoint" "$@"
+  install_server
+  require_license
+  start_daemon
+  curl --fail-with-body --silent --show-error --unix-socket "$socket" --get "http://localhost$endpoint" "$@"
+  printf '\n'
 }
 
 command=${1:-help}
-if [ "$#" -gt 0 ]; then
-  shift
-fi
+if [ "$#" -gt 0 ]; then shift; fi
 
 case "$command" in
+  accept-license)
+    [ "$#" -eq 0 ] || { usage >&2; exit 2; }
+    install_server
+    eula=$(find_eula)
+    [ -n "$eula" ] || { printf '%s\n' 'ERROR: EULA.txt was not found in the server bundle.' >&2; exit 1; }
+    [ -t 0 ] || { printf '%s\n' 'ERROR: license acceptance requires an interactive terminal.' >&2; exit 2; }
+    cat "$eula"
+    printf '\nType yes to confirm that you have read and accept the JetBrains agreement: '
+    read -r answer
+    [ "$answer" = yes ] || { printf '%s\n' 'License was not accepted.' >&2; exit 1; }
+    mkdir -p "$state_dir"
+    license_hash > "$state_dir/accepted-eula-hash"
+    chmod 0600 "$state_dir/accepted-eula-hash"
+    printf '%s\n' 'JetBrains agreement accepted. Run: ij wait 300'
+    ;;
   status)
     [ "$#" -eq 0 ] || { usage >&2; exit 2; }
-    request /v1/status
+    install_server
+    require_license
+    start_daemon
+    curl --fail-with-body --silent --show-error --unix-socket "$socket" http://localhost/v1/status
+    printf '\n'
+    ;;
+  wait)
+    [ "$#" -le 1 ] || { usage >&2; exit 2; }
+    request /v1/wait --data-urlencode "seconds=${1:-300}"
     ;;
   symbols)
     [ "$#" -eq 1 ] || { usage >&2; exit 2; }
@@ -64,25 +139,12 @@ case "$command" in
     ;;
   definition|type-definition|implementation|references|hover|code-actions)
     [ "$#" -eq 3 ] || { usage >&2; exit 2; }
-    request "/v1/$command" \
-      --data-urlencode "file=$1" \
-      --data-urlencode "line=$2" \
-      --data-urlencode "column=$3"
+    request "/v1/$command" --data-urlencode "file=$1" --data-urlencode "line=$2" --data-urlencode "column=$3"
     ;;
   rename-preview)
     [ "$#" -eq 4 ] || { usage >&2; exit 2; }
-    request /v1/rename-preview \
-      --data-urlencode "file=$1" \
-      --data-urlencode "line=$2" \
-      --data-urlencode "column=$3" \
-      --data-urlencode "newName=$4"
+    request /v1/rename-preview --data-urlencode "file=$1" --data-urlencode "line=$2" --data-urlencode "column=$3" --data-urlencode "newName=$4"
     ;;
-  help|-h|--help)
-    usage
-    ;;
-  *)
-    printf 'Unknown command: %s\n\n' "$command" >&2
-    usage >&2
-    exit 2
-    ;;
+  help|-h|--help) usage ;;
+  *) printf 'Unknown command: %s\n\n' "$command" >&2; usage >&2; exit 2 ;;
 esac

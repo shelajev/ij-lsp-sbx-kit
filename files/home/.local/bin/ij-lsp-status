@@ -1,25 +1,15 @@
 #!/bin/sh
 set -u
 
-printf '%s\n' 'ij-lsp provides IntelliJ intelligence through code-server and the agent-facing ij command.'
-if [ -S /tmp/ij-lsp-agent.sock ]; then
-  printf '%s\n' 'READY: the agent bridge is available. Run: ij status'
-else
-  printf '%s\n' 'NOT READY: the agent bridge socket has not appeared yet.'
-fi
-printf '\n%s\n' 'Installed code-server extensions:'
+printf '%s\n' 'Agent path (headless; no browser required):'
+/home/agent/.local/bin/ij status || true
 
-if command -v code-server >/dev/null 2>&1; then
-  code-server --list-extensions --show-versions 2>&1
-else
-  printf '%s\n' 'ERROR: code-server is not on PATH.'
-fi
-
-printf '\n%s\n' 'Editor service:'
+printf '\n%s\n' 'Optional browser editor:'
 if curl -fsS -o /dev/null http://127.0.0.1:8080/; then
   printf '%s\n' 'READY: code-server is responding on container port 8080.'
 else
   printf '%s\n' 'NOT READY: inspect /tmp/ij-lsp-code-server.log.'
 fi
 
-printf '\n%s\n' "On the host, run 'sbx ports <sandbox-name>' and open the port named 'intellij-code-server'."
+printf '\n%s\n' 'Installed code-server extensions:'
+code-server --list-extensions --show-versions 2>&1 || true

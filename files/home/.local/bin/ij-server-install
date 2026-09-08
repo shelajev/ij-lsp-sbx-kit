@@ -1,0 +1,77 @@
+#!/bin/sh
+set -eu
+
+state_dir=${IJ_LSP_STATE_DIR:-"$HOME/.local/share/ij-lsp"}
+extension_root=${IJ_LSP_EXTENSION_ROOT:-"$HOME/.local/share/code-server/extensions"}
+servers_dir=${IJ_LSP_SERVER_DIR:-"$HOME/.local/share/JetBrains/IntelliJServer/servers/intellij-server"}
+metadata=
+
+metadata=$(find "$extension_root" -mindepth 2 -maxdepth 2 -type f \
+  -path '*/jetbrains.intellij-server-*/server-bundle.json' -printf '%T@ %p\n' 2>/dev/null \
+  | sort -nr | sed -n '1s/^[^ ]* //p')
+
+if [ -z "$metadata" ]; then
+  printf '%s\n' 'ERROR: JetBrains.intellij-server is installed, but server-bundle.json was not found.' >&2
+  printf '%s\n' 'Try: code-server --install-extension JetBrains.intellij-server --force' >&2
+  exit 1
+fi
+
+bundle=$(ij-node -e '
+const fs = require("fs");
+const value = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+if (!/^https:\/\/(download|download-cdn)\.jetbrains\.com\//.test(value.url || "")) throw new Error("unexpected server URL");
+if (!/^[A-Za-z0-9._-]+$/.test(value.version || "")) throw new Error("invalid server version");
+const archiveName = value.archiveName || new URL(value.url).pathname.split("/").pop();
+if (!/^[A-Za-z0-9._-]+\.tar\.gz$/.test(archiveName || "")) throw new Error("invalid archive name");
+if (!/^[a-fA-F0-9]{64}$/.test(value.sha256 || "")) throw new Error("invalid SHA-256");
+process.stdout.write([value.url, value.version, archiveName, value.sha256.toLowerCase()].join("\n"));
+' "$metadata")
+
+url=$(printf '%s\n' "$bundle" | sed -n '1p')
+version=$(printf '%s\n' "$bundle" | sed -n '2p')
+archive_name=$(printf '%s\n' "$bundle" | sed -n '3p')
+sha256=$(printf '%s\n' "$bundle" | sed -n '4p')
+install_dir="$servers_dir/$version"
+mkdir -p "$state_dir"
+
+find_launcher() {
+  if [ -x "$install_dir/bin/intellij-server" ]; then
+    printf '%s\n' "$install_dir/bin/intellij-server"
+    return 0
+  fi
+  find "$install_dir" -mindepth 2 -maxdepth 3 -type f -path '*/bin/intellij-server' -perm -u+x -print -quit 2>/dev/null
+}
+
+launcher=$(find_launcher || true)
+if [ -n "$launcher" ]; then
+  ln -sfn "$install_dir" "$state_dir/current"
+  printf '%s\n' "$launcher"
+  exit 0
+fi
+
+mkdir -p "$servers_dir"
+tmp_dir=$(mktemp -d "$servers_dir/.ij-install.XXXXXX")
+trap 'rm -rf -- "$tmp_dir"' EXIT HUP INT TERM
+archive="$tmp_dir/$archive_name"
+
+printf 'Downloading IntelliJ language server %s (about 1 GB)...\n' "$version" >&2
+curl --fail --location --show-error --progress-bar "$url" -o "$archive"
+printf '%s  %s\n' "$sha256" "$archive" | sha256sum -c - >&2
+mkdir -p "$tmp_dir/unpacked"
+tar -xzf "$archive" -C "$tmp_dir/unpacked"
+
+extracted=$(find "$tmp_dir/unpacked" -type f -path '*/bin/intellij-server' -print -quit)
+if [ -z "$extracted" ]; then
+  printf '%s\n' 'ERROR: downloaded archive does not contain bin/intellij-server.' >&2
+  exit 1
+fi
+chmod 0755 "$extracted"
+extracted_root=$(dirname "$(dirname "$extracted")")
+mv "$extracted_root" "$install_dir"
+ln -sfn "$install_dir" "$state_dir/current"
+launcher=$(find_launcher || true)
+if [ -z "$launcher" ]; then
+  printf '%s\n' 'ERROR: IntelliJ server launcher disappeared after installation.' >&2
+  exit 1
+fi
+printf '%s\n' "$launcher"

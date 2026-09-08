@@ -1,9 +1,9 @@
 schemaVersion: "2"
 kind: mixin
 name: ij-lsp
-version: 0.3.0
+version: 0.4.0
 displayName: Java and Kotlin by IntelliJ IDEA
-description: Adds IntelliJ-powered Java and Kotlin queries for the agent plus a code-server editor for the user.
+description: Adds headless IntelliJ-powered Java and Kotlin queries for the agent plus an optional code-server editor.
 sourceURL: https://github.com/shelajev/ij-lsp-sbx-kit
 licenses:
   - Apache-2.0
@@ -56,8 +56,10 @@ setup:
         mkdir -p /usr/local/lib
         tar -xzf /tmp/ij-lsp-code-server.tar.gz -C /usr/local/lib
         ln -sfn "/usr/local/lib/${archive%.tar.gz}/bin/code-server" /usr/local/bin/code-server
+        ln -sfn "/usr/local/lib/${archive%.tar.gz}/lib/node" /usr/local/bin/ij-node
         rm -f /tmp/ij-lsp-code-server.tar.gz
         code-server --version
+        ij-node --version
       description: Install the pinned code-server release and verify its checksum
 
     - command: |
@@ -96,9 +98,11 @@ setup:
 
 agentInstructions:
   content: |
-    # IntelliJ tools are available: use `ij` first
+    # IntelliJ is agent-callable: run `ij status` immediately
 
-    This sandbox exposes JetBrains IntelliJ Java/Kotlin intelligence through the agent-facing `ij` command. Run `ij status` first. Do not search MCP catalogs, the PATH, running processes, or workspace configuration for another LSP or `jdtls`.
+    This sandbox exposes JetBrains IntelliJ Java/Kotlin intelligence directly through the headless `ij` command. It does not require VS Code, a browser, MCP discovery, or an editor extension host. Run `ij status` first; on first use it downloads the server bundle selected and checksummed by the installed JetBrains extension.
+
+    If `ij status` returns `setupRequired: license`, stop and ask the user to run `ij accept-license` in an interactive sandbox terminal. Never accept legal terms for the user. After acceptance, run `ij wait 300` once to wait for project import and indexing. Do not search MCP catalogs, the PATH, running processes, workspace configuration, or `jdtls` for another LSP.
 
     Prefer these semantic queries over text-only guesses:
 
@@ -108,6 +112,6 @@ agentInstructions:
     - `ij diagnostics <file>` returns current IntelliJ diagnostics.
     - `ij code-actions <file> <line> <column>` and `ij rename-preview <file> <line> <column> <new-name>` return previews only; they never edit files.
 
-    Results are JSON. If `ij status` says the bridge is not ready, ask the user to open the `intellij-code-server` URL once; code-server starts workspace extensions when its browser workbench connects. Empty results can mean Maven, Gradle, or Bazel import and indexing are still running, so check `ij status` and `/tmp/ij-lsp-code-server.log` before concluding that no symbol exists. Only claim IntelliJ-backed results after a successful `ij` response. Continue validating changes with the project's normal build, tests, lint, and formatting.
+    Results are JSON. Empty results can mean Maven, Gradle, or Bazel import and indexing are still running, so run `ij wait 300` and recheck `ij status` before concluding that no symbol exists. Agent queries start and talk to JetBrains' `intellij-server` directly over stdio behind a private Unix socket. Only claim IntelliJ-backed results after a successful `ij` response. Continue validating changes with the project's normal build, tests, lint, and formatting.
 
-    The same IntelliJ integration is available to the user in code-server. Tell them to run `sbx ports <sandbox-name>` on the host and open the port labeled `intellij-code-server`. JetBrains' initial region, license, and activation flow still requires the user in the browser.
+    An optional code-server editor is also available to humans on the `intellij-code-server` port, but opening it is never an agent setup step and is not required for `ij`.
