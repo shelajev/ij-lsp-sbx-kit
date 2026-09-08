@@ -1,0 +1,21 @@
+#!/bin/sh
+set -u
+
+printf '%s\n' 'ij-lsp is a JetBrains IntelliJ editor integration inside code-server.'
+printf '%s\n' 'It is not an MCP server, jdtls process, or agent-callable LSP tool.'
+printf '\n%s\n' 'Installed code-server extensions:'
+
+if command -v code-server >/dev/null 2>&1; then
+  code-server --list-extensions --show-versions 2>&1
+else
+  printf '%s\n' 'ERROR: code-server is not on PATH.'
+fi
+
+printf '\n%s\n' 'Editor service:'
+if curl -fsS -o /dev/null http://127.0.0.1:8080/; then
+  printf '%s\n' 'READY: code-server is responding on container port 8080.'
+else
+  printf '%s\n' 'NOT READY: inspect /tmp/ij-lsp-code-server.log.'
+fi
+
+printf '\n%s\n' "On the host, run 'sbx ports <sandbox-name>' and open the port named 'intellij-code-server'."

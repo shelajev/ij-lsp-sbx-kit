@@ -52,6 +52,20 @@ If the page does not load, inspect the service log:
 sbx exec <sandbox-name> -- cat /tmp/ij-lsp-code-server.log
 ```
 
+## Demo fast path
+
+For a new sandbox, tell the agent:
+
+```text
+This sandbox has the ij-lsp kit. Run `ij-lsp-status` now. Do not search for an
+MCP server, jdtls, or another LSP process: JetBrains.intellij-server is an
+editor-only code-server extension. Report its status, then tell me how to open
+the intellij-code-server port.
+```
+
+For a sandbox created with an older kit revision, use the longer prompt in the
+[existing-sandbox instructions](#existing-sandbox-prompt) below.
+
 ## Test the kit
 
 ### From GitHub
@@ -74,6 +88,7 @@ sbx create --name ij-lsp-test codex \
 Confirm the extension and web service inside it:
 
 ```console
+sbx exec ij-lsp-test -- ij-lsp-status
 sbx exec ij-lsp-test -- code-server --list-extensions --show-versions
 sbx exec ij-lsp-test -- curl -fsSI http://127.0.0.1:8080/
 sbx ports ij-lsp-test
@@ -110,6 +125,21 @@ Set `SBX_AGENT` to use a different base agent:
 
 ```console
 SBX_AGENT=claude ./run.sh ij-lsp-claude ~/my-jvm-project
+```
+
+### Existing-sandbox prompt
+
+Kit files and agent memory are applied when a sandbox is created. If you cannot
+recreate an older demo sandbox, paste this into its agent session:
+
+```text
+Stop searching for MCP servers, jdtls, or a standalone LSP process. This
+sandbox's IntelliJ intelligence runs in the JetBrains.intellij-server
+code-server extension on container port 8080. It is editor-only, not a tool you
+can invoke. Verify it with `code-server --list-extensions --show-versions` and
+`curl -fsSI http://127.0.0.1:8080/`. Then tell me to run `sbx ports
+<sandbox-name>` and open the port named `intellij-code-server`. Continue your
+own work with repository search and the Maven/Gradle/Bazel build and tests.
 ```
 
 ## Versioning
@@ -156,9 +186,11 @@ for the sandboxed agent. At sandbox creation, Docker writes mixin instructions
 to `kits-memory/ij-lsp.md` and links that file from the base agent's main memory
 file.
 
-The note explains what the editor provides, how to help the user find its port
-and logs, and that the terminal agent cannot call this LSP directly. An
-agent-callable integration would require a separate LSP-to-MCP bridge.
+The note tells the agent to run `ij-lsp-status` immediately instead of searching
+for MCP resources, `jdtls`, workspace configuration, or a standalone process.
+It also explains what the editor provides, how to find its port and logs, and
+that the terminal agent cannot call this LSP directly. An agent-callable
+integration would require a separate LSP-to-MCP bridge.
 
 ## Compatibility
 
