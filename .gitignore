@@ -1,0 +1,8 @@
+.DS_Store
+*.zip
+*.vsix
+*.log
+.env
+.env.*
+*.key
+*.pem

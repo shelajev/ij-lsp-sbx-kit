@@ -1,0 +1,106 @@
+schemaVersion: "2"
+kind: mixin
+name: ij-lsp
+version: 0.1.0
+displayName: Java and Kotlin by IntelliJ IDEA
+description: Runs code-server with JetBrains' IntelliJ-powered Java and Kotlin language server extension in the sandbox workspace.
+sourceURL: https://github.com/shelajev/ij-lsp-sbx-kit
+licenses:
+  - Apache-2.0
+
+permissions:
+  network:
+    allow:
+      # Pinned code-server release assets.
+      - github.com
+      - objects.githubusercontent.com
+      - release-assets.githubusercontent.com
+
+      # Open VSX metadata and extension content.
+      - open-vsx.org
+      - openvsx.eclipsecontent.org
+
+      # IntelliJ language-server bootstrap, updates, and licensing.
+      - resources.jetbrains.com
+      - download.jetbrains.com
+      - download-cdn.jetbrains.com
+      - cache-redirector.jetbrains.com
+      - account.jetbrains.com
+      - plugins.jetbrains.com
+      - www.jetbrains.com
+
+ports:
+  - container: 8080
+    protocol: tcp
+    name: intellij-code-server
+
+setup:
+  install:
+    - command: |
+        set -eu
+        case "$(uname -m)" in
+          x86_64|amd64)
+            archive=code-server-4.135.0-linux-amd64.tar.gz
+            sha256=300ef4e37e469e6368a4673c6a623e1c9ba8a34f42b394fb49c431a8900bc7d1
+            ;;
+          aarch64|arm64)
+            archive=code-server-4.135.0-linux-arm64.tar.gz
+            sha256=fe6561798415e709109cb902dca2a57a687240af7d8220f6fa1d01cd2ae0541e
+            ;;
+          *)
+            echo "Unsupported architecture: $(uname -m)" >&2
+            exit 1
+            ;;
+        esac
+        curl -fsSL "https://github.com/coder/code-server/releases/download/v4.135.0/${archive}" -o /tmp/ij-lsp-code-server.tar.gz
+        printf '%s  %s\n' "$sha256" /tmp/ij-lsp-code-server.tar.gz | sha256sum -c -
+        mkdir -p /usr/local/lib
+        tar -xzf /tmp/ij-lsp-code-server.tar.gz -C /usr/local/lib
+        ln -sfn "/usr/local/lib/${archive%.tar.gz}/bin/code-server" /usr/local/bin/code-server
+        rm -f /tmp/ij-lsp-code-server.tar.gz
+        code-server --version
+      description: Install the pinned code-server release and verify its checksum
+
+    - command: |
+        set -eu
+        code-server --install-extension JetBrains.intellij-server --force
+      user: "1000"
+      description: Install the latest IntelliJ language server extension from Open VSX
+
+  startup:
+    - command:
+        - sh
+        - -c
+        - nohup /home/agent/.local/bin/start-ij-lsp-code-server.sh > /tmp/ij-lsp-code-server.log 2>&1 &
+      user: "1000"
+      description: Start code-server on the sandbox workspace
+
+  files:
+    - path: /home/agent/.local/bin/start-ij-lsp-code-server.sh
+      content: |
+        exec code-server --bind-addr 0.0.0.0:8080 --auth none "${WORKDIR}"
+      mode: "0755"
+      description: Create the code-server startup wrapper with the runtime workspace path
+
+    - path: /home/agent/.local/share/code-server/User/settings.json
+      content: |
+        {
+          "workbench.startupEditor": "none",
+          "workbench.tips.enabled": false,
+          "telemetry.telemetryLevel": "off",
+          "intellij.trace.server": "off",
+          "intellij.dataSharing": "none"
+        }
+      mode: "0644"
+      onlyIfMissing: true
+      description: Seed privacy-conscious editor and language-server defaults without overwriting existing settings
+
+agentInstructions:
+  content: |
+    This sandbox runs code-server with JetBrains' Java and Kotlin by IntelliJ IDEA extension on its published `intellij-code-server` port.
+
+    The extension provides editor-side IntelliJ code completion, navigation, analysis, refactoring, and formatting for Java and Kotlin projects using Maven, Gradle, or Bazel. Initial project import and indexing may take time.
+
+    This is a human-facing web editor integration. The extension does not expose LSP methods as tools to the terminal agent, so do not claim to have queried IntelliJ diagnostics, references, or refactorings. Continue to validate changes with the project's normal build, test, lint, and formatting commands.
+
+    When the user wants to open the editor, tell them to run `sbx ports <sandbox-name>` on the host and open the host port labeled `intellij-code-server`. Service logs are available at `/tmp/ij-lsp-code-server.log`, and `code-server --list-extensions --show-versions` verifies the extension installation.
