@@ -1,7 +1,7 @@
 schemaVersion: "2"
 kind: mixin
 name: ij-lsp
-version: 0.4.0
+version: 0.4.1
 displayName: Java and Kotlin by IntelliJ IDEA
 description: Adds headless IntelliJ-powered Java and Kotlin queries for the agent plus an optional code-server editor.
 sourceURL: https://github.com/shelajev/ij-lsp-sbx-kit
@@ -69,6 +69,16 @@ setup:
       description: Install the latest IntelliJ language server extension from Open VSX
 
   startup:
+    - command:
+        - chmod
+        - "0755"
+        - /home/agent/.local/bin/ij
+        - /home/agent/.local/bin/ij-lsp-status
+        - /home/agent/.local/bin/ij-server-install
+        - /home/agent/.local/lib/ij-lsp/daemon.js
+      user: "1000"
+      description: Restore executable modes after reproducible kit injection
+
     - command:
         - sh
         - -c
