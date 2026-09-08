@@ -50,6 +50,13 @@ install_server() {
 require_license() {
   expected=$(license_hash || true)
   accepted=$(accepted_hash || true)
+  if [ -n "$expected" ] && [ "$accepted" != "$expected" ] && [ "${IJ_LSP_ACCEPT_LICENSE:-false}" = true ]; then
+    printf '%s\n' 'Accepting the bundled JetBrains agreement from explicit kit argument.' >&2
+    mkdir -p "$state_dir"
+    printf '%s\n' "$expected" > "$state_dir/accepted-eula-hash"
+    chmod 0600 "$state_dir/accepted-eula-hash"
+    accepted=$expected
+  fi
   if [ -z "$expected" ] || [ "$accepted" != "$expected" ]; then
     printf '%s\n' '{"setupRequired":"license","message":"Run interactively: ij accept-license"}'
     exit 3

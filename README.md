@@ -43,10 +43,24 @@ sbx create --name ij-lsp-test codex \
   ~/my-jvm-project
 ```
 
+To explicitly accept JetBrains' bundled agreement without opening a shell, add
+the opt-in kit argument:
+
+```console
+sbx create --name ij-lsp-test codex \
+  --kit "git+https://github.com/shelajev/ij-lsp-sbx-kit.git" \
+  --kit-arg ij-lsp.accept-license=true \
+  ~/my-jvm-project
+```
+
+The default is `false`. Passing `true` confirms that you accept the agreement
+shipped in the downloaded JetBrains server bundle. It downloads the verified
+bundle and starts IntelliJ during sandbox startup.
+
 The first `ij` invocation downloads the approximately 1 GB IntelliJ server
 bundle selected by the installed JetBrains extension and verifies its SHA-256.
-JetBrains requires explicit acceptance of the agreement bundled with that
-server. Do that once in an interactive sandbox command:
+Without the opt-in argument, JetBrains requires interactive acceptance of the
+agreement bundled with that server:
 
 ```console
 sbx exec -it ij-lsp-test -- ij accept-license

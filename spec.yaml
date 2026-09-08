@@ -1,12 +1,22 @@
 schemaVersion: "2"
 kind: mixin
 name: ij-lsp
-version: 0.4.1
+version: 0.5.0
 displayName: Java and Kotlin by IntelliJ IDEA
 description: Adds headless IntelliJ-powered Java and Kotlin queries for the agent plus an optional code-server editor.
 sourceURL: https://github.com/shelajev/ij-lsp-sbx-kit
 licenses:
   - Apache-2.0
+
+args:
+  accept-license:
+    default: "false"
+    description: Explicitly accept the JetBrains server agreement during sandbox startup
+    enum: ["false", "true"]
+
+environment:
+  variables:
+    IJ_LSP_ACCEPT_LICENSE: "${{ kit.args.accept-license }}"
 
 permissions:
   network:
@@ -82,6 +92,13 @@ setup:
     - command:
         - sh
         - -c
+        - 'if [ "$IJ_LSP_ACCEPT_LICENSE" = true ]; then exec /home/agent/.local/bin/ij status; fi'
+      user: "1000"
+      description: With explicit kit consent, accept the bundled agreement and start IntelliJ
+
+    - command:
+        - sh
+        - -c
         - nohup /home/agent/.local/bin/start-ij-lsp-code-server.sh > /tmp/ij-lsp-code-server.log 2>&1 &
       user: "1000"
       description: Start code-server on the sandbox workspace
@@ -112,7 +129,7 @@ agentInstructions:
 
     This sandbox exposes JetBrains IntelliJ Java/Kotlin intelligence directly through the headless `ij` command. It does not require VS Code, a browser, MCP discovery, or an editor extension host. Run `ij status` first; on first use it downloads the server bundle selected and checksummed by the installed JetBrains extension.
 
-    If `ij status` returns `setupRequired: license`, stop and ask the user to run `ij accept-license` in an interactive sandbox terminal. Never accept legal terms for the user. After acceptance, run `ij wait 300` once to wait for project import and indexing. Do not search MCP catalogs, the PATH, running processes, workspace configuration, or `jdtls` for another LSP.
+    If `ij status` returns `setupRequired: license`, stop and ask the user to run `ij accept-license` in an interactive sandbox terminal. Never accept legal terms for the user. The user may instead have explicitly accepted during sandbox creation with the kit argument `ij-lsp.accept-license=true`; only that preconfigured value permits non-interactive acceptance. After acceptance, run `ij wait 300` once to wait for project import and indexing. Do not search MCP catalogs, the PATH, running processes, workspace configuration, or `jdtls` for another LSP.
 
     Prefer these semantic queries over text-only guesses:
 
