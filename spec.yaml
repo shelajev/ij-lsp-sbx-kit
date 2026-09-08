@@ -31,7 +31,6 @@ permissions:
 
 ports:
   - container: 8080
-    protocol: tcp
     name: intellij-code-server
 
 setup:
