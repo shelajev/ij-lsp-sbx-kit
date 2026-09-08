@@ -48,6 +48,7 @@ mkdir -p "$test_dir/bin" "$test_dir/extensions/jetbrains.intellij-server-test" "
 ln -s "$(command -v node)" "$test_dir/bin/ij-node"
 cp "$repo_dir/tests/fixtures/server-bundle.json" "$test_dir/extensions/jetbrains.intellij-server-test/server-bundle.json"
 cp /bin/true "$test_dir/servers/test/bin/intellij-server"
+printf '%s\n' 'Fake JetBrains agreement' > "$test_dir/servers/test/EULA.txt"
 chmod 0755 "$test_dir/servers/test/bin/intellij-server"
 
 launcher="$(
@@ -59,5 +60,7 @@ launcher="$(
 )"
 [[ "$launcher" == "$test_dir/servers/test/bin/intellij-server" ]]
 [[ -L "$test_dir/installer-state/current" ]]
+eula="$(find -L "$test_dir/installer-state/current" -maxdepth 4 -type f -name EULA.txt -print -quit)"
+[[ "$eula" == "$test_dir/installer-state/current/EULA.txt" ]]
 
 printf '%s\n' 'headless bridge smoke test passed'

@@ -28,7 +28,7 @@ EOF
 }
 
 find_eula() {
-  find "$state_dir/current" -maxdepth 4 -type f -name EULA.txt -print -quit
+  find -L "$state_dir/current" -maxdepth 4 -type f -name EULA.txt -print -quit
 }
 
 accepted_hash() {
