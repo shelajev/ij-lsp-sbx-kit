@@ -10,24 +10,16 @@ No browser or VS Code window is required for the agent. An optional
 [code-server](https://github.com/coder/code-server) editor is included for
 humans.
 
-## Prompt for the sandbox agent
+This is an independent community project, not an official JetBrains product.
 
-Paste this immediately after creating the sandbox:
+## Why this exists
 
-```text
-Use the installed headless IntelliJ tools for this Java/Kotlin repository.
-Run `ij status` now. If it returns `setupRequired: license`, stop and tell me
-to run `ij accept-license` interactively; do not search for another LSP and do
-not accept terms for me. Otherwise run `ij wait 300`, then use `ij symbols`,
-`ij outline`, `ij definition`, `ij references`, `ij hover`, and
-`ij diagnostics` whenever relevant. The commands return JSON and do not edit
-files. Do not open VS Code, search MCP, or look for jdtls.
-```
+JetBrains' extension already brings IntelliJ intelligence to VS Code-based
+editors. This kit makes the same language server directly useful to coding
+agents: it launches `intellij-server` headlessly and exposes a small,
+predictable CLI instead of requiring an agent to discover or implement LSP.
 
-The same instructions are embedded in `spec.yaml`, so agents in newly created
-sandboxes should discover `ij` without this prompt.
-
-## Quick start
+## Known-working quick start
 
 Allow kits from this GitHub account once:
 
@@ -35,47 +27,49 @@ Allow kits from this GitHub account once:
 sbx settings set kit.allowedSources '["docker.io/","github.com/shelajev/"]'
 ```
 
-Create a named sandbox:
+Create a sandbox with explicit license acceptance. Replace the final path with
+your Java or Kotlin project:
 
 ```console
-sbx create --name ij-lsp-test codex \
-  --kit "git+https://github.com/shelajev/ij-lsp-sbx-kit.git" \
-  ~/my-jvm-project
-```
-
-To explicitly accept JetBrains' bundled agreement without opening a shell, add
-the opt-in kit argument:
-
-```console
-sbx create --name ij-lsp-test codex \
+sbx create --name ij-lsp-claude claude \
   --kit "git+https://github.com/shelajev/ij-lsp-sbx-kit.git" \
   --kit-arg ij-lsp.accept-license=true \
   ~/my-jvm-project
+
+sbx run --name ij-lsp-claude
 ```
 
-The default is `false`. Passing `true` confirms that you accept the agreement
-shipped in the downloaded JetBrains server bundle and starts IntelliJ during
-sandbox startup, so project indexing can begin before the agent asks a question.
+Sandbox creation downloads and checksum-verifies the approximately 1 GB
+platform-specific IntelliJ server. With the opt-in argument, it also records
+acceptance of the bundled agreement and starts IntelliJ before the agent runs.
+Named sandbox restarts reuse the downloaded server.
 
-Sandbox creation downloads the approximately 1 GB IntelliJ server bundle
-selected by the installed JetBrains extension and verifies its SHA-256. This
-makes the agent's first `ij` invocation fast and avoids flooding its transcript
-with download progress.
-Without the opt-in argument, JetBrains requires interactive acceptance of the
-agreement bundled with that server:
+## Prompt for the sandbox agent
+
+Paste this immediately after creating the sandbox:
+
+```text
+Use the installed headless IntelliJ tools for this Java/Kotlin repository.
+Run `ij status` now, then `ij wait 300`. Use `ij symbols`, `ij outline`,
+`ij definition`, `ij references`, `ij hover`, and `ij diagnostics` whenever
+relevant. The commands return JSON and do not edit files. Do not open VS Code,
+search MCP, or look for jdtls.
+```
+
+The same instructions are embedded in `spec.yaml`, so agents in newly created
+sandboxes should discover `ij` without this prompt.
+
+## Manual license acceptance
+
+The `accept-license` kit argument defaults to `false`. To review and accept the
+agreement interactively instead, omit the argument when creating the sandbox,
+then run:
 
 ```console
-sbx exec -it ij-lsp-test -- ij accept-license
+sbx exec -it <sandbox-name> -- ij accept-license
 ```
 
-Then start the agent:
-
-```console
-sbx run --name ij-lsp-test
-```
-
-The server and its per-project index start lazily when the agent runs `ij`.
-The agent can wait for JetBrains' own index-ready notification with:
+The agent can wait for JetBrains' own import-and-index-ready notification with:
 
 ```console
 ij wait 300
@@ -110,15 +104,14 @@ sbx kit validate "git+https://github.com/shelajev/ij-lsp-sbx-kit.git"
 sbx kit inspect "git+https://github.com/shelajev/ij-lsp-sbx-kit.git"
 ```
 
-Create the sandbox, accept the license, and exercise IntelliJ against a real
-source file:
+Create the sandbox and exercise IntelliJ against a real source file:
 
 ```console
 sbx create --name ij-lsp-test codex \
   --kit "git+https://github.com/shelajev/ij-lsp-sbx-kit.git" \
+  --kit-arg ij-lsp.accept-license=true \
   ~/my-jvm-project
 
-sbx exec -it ij-lsp-test -- ij accept-license
 sbx exec ij-lsp-test -- ij wait 300
 sbx exec ij-lsp-test -- ij status
 sbx exec ij-lsp-test -- ij outline src/main/java/example/App.java
