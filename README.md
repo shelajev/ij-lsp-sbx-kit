@@ -23,19 +23,23 @@ predictable CLI instead of requiring an agent to discover or implement LSP.
 
 Allow kits from this GitHub account once:
 
-```console
+```bash
 sbx settings set kit.allowedSources '["docker.io/","github.com/shelajev/"]'
 ```
 
 Create a sandbox with explicit license acceptance. Replace the final path with
 your Java or Kotlin project:
 
-```console
+```bash
 sbx create --name ij-lsp-claude claude \
   --kit "git+https://github.com/shelajev/ij-lsp-sbx-kit.git" \
   --kit-arg ij-lsp.accept-license=true \
   ~/my-jvm-project
+```
 
+Once creation finishes, attach the agent:
+
+```bash
 sbx run --name ij-lsp-claude
 ```
 
@@ -65,13 +69,13 @@ The `accept-license` kit argument defaults to `false`. To review and accept the
 agreement interactively instead, omit the argument when creating the sandbox,
 then run:
 
-```console
+```bash
 sbx exec -it <sandbox-name> -- ij accept-license
 ```
 
 The agent can wait for JetBrains' own import-and-index-ready notification with:
 
-```console
+```bash
 ij wait 300
 ```
 
@@ -99,14 +103,14 @@ never modifies the workspace.
 
 Validate and inspect it:
 
-```console
+```bash
 sbx kit validate "git+https://github.com/shelajev/ij-lsp-sbx-kit.git"
 sbx kit inspect "git+https://github.com/shelajev/ij-lsp-sbx-kit.git"
 ```
 
 Create the sandbox and exercise IntelliJ against a real source file:
 
-```console
+```bash
 sbx create --name ij-lsp-test codex \
   --kit "git+https://github.com/shelajev/ij-lsp-sbx-kit.git" \
   --kit-arg ij-lsp.accept-license=true \
@@ -125,13 +129,13 @@ Adjust the file and position to match your project. `ij status` should report
 
 If a dependency host is blocked, inspect the policy log:
 
-```console
+```bash
 sbx policy log ij-lsp-test
 ```
 
 Remove the sandbox when finished:
 
-```console
+```bash
 sbx rm ij-lsp-test
 ```
 
@@ -139,13 +143,13 @@ sbx rm ij-lsp-test
 
 The fast smoke test uses a fake LSP process and requires only Node and curl:
 
-```console
+```bash
 ./tests/smoke.sh
 ```
 
 For the complete Docker Sandbox test:
 
-```console
+```bash
 sbx kit validate .
 sbx kit inspect .
 ./run.sh ij-lsp-test ~/my-jvm-project
@@ -153,7 +157,7 @@ sbx kit inspect .
 
 Set `SBX_AGENT=claude` to use Claude:
 
-```console
+```bash
 SBX_AGENT=claude ./run.sh ij-lsp-claude ~/my-jvm-project
 ```
 
@@ -162,7 +166,7 @@ SBX_AGENT=claude ./run.sh ij-lsp-claude ~/my-jvm-project
 code-server and the JetBrains extension still start on container port 8080.
 To use them as a human:
 
-```console
+```bash
 sbx ports ij-lsp-test
 ```
 
