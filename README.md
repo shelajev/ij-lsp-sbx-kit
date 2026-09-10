@@ -14,18 +14,22 @@ product.
 
 Allow kits from this GitHub account once:
 
-```console
+```bash
 sbx settings set kit.allowedSources '["docker.io/","github.com/shelajev/"]'
 ```
 
 Create a named sandbox for a Java or Kotlin project:
 
-```console
+```bash
 sbx create --name ij-lsp-codex codex \
   --kit "git+https://github.com/shelajev/ij-lsp-sbx-kit.git" \
   --kit-arg ij-lsp.accept-license=true \
   ~/my-jvm-project
+```
 
+Once creation finishes, attach the agent:
+
+```bash
 sbx run --name ij-lsp-codex
 ```
 
@@ -56,7 +60,7 @@ for JetBrains' project-import and indexing-ready notification.
 
 Without `--kit-arg ij-lsp.accept-license=true`, accept interactively:
 
-```console
+```bash
 sbx exec -it ij-lsp-codex -- ij accept-license
 sbx exec ij-lsp-codex -- ij ready 300
 ```
@@ -91,7 +95,7 @@ and rename are previews; `ij` never edits files.
 Results default to compact JSON with workspace-relative file paths, 1-based
 positions, and at most 100 top-level results. Global options are available:
 
-```console
+```bash
 ij --limit 250 references src/main/java/example/App.java:20:15
 ij --raw definition src/main/java/example/App.java:20:15
 ```
@@ -121,14 +125,14 @@ The Markdown note for sandbox agents is `agentInstructions.content` in
 
 Validate and inspect it:
 
-```console
+```bash
 sbx kit validate "git+https://github.com/shelajev/ij-lsp-sbx-kit.git"
 sbx kit inspect "git+https://github.com/shelajev/ij-lsp-sbx-kit.git"
 ```
 
 Then exercise a real project:
 
-```console
+```bash
 sbx create --name ij-lsp-test codex \
   --kit "git+https://github.com/shelajev/ij-lsp-sbx-kit.git" \
   --kit-arg ij-lsp.accept-license=true \
@@ -146,7 +150,7 @@ Adjust the file and position for your project. A ready status reports
 
 If a project dependency host is blocked, inspect the sandbox policy log:
 
-```console
+```bash
 sbx policy log ij-lsp-test
 ```
 
@@ -154,13 +158,13 @@ sbx policy log ij-lsp-test
 
 The fast smoke test uses a fake LSP server:
 
-```console
+```bash
 ./tests/smoke.sh
 ```
 
 For Docker Sandbox validation and a real-project run:
 
-```console
+```bash
 sbx kit validate .
 sbx kit inspect .
 ./run.sh ij-lsp-test ~/my-jvm-project
@@ -168,7 +172,7 @@ sbx kit inspect .
 
 Use another agent template with `SBX_AGENT`, for example:
 
-```console
+```bash
 SBX_AGENT=claude ./run.sh ij-lsp-claude ~/my-jvm-project
 ```
 
