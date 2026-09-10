@@ -2,21 +2,80 @@
 set -eu
 
 state_dir=${IJ_LSP_STATE_DIR:-"$HOME/.local/share/ij-lsp"}
-extension_root=${IJ_LSP_EXTENSION_ROOT:-"$HOME/.local/share/code-server/extensions"}
 servers_dir=${IJ_LSP_SERVER_DIR:-"$HOME/.local/share/JetBrains/IntelliJServer/servers/intellij-server"}
-metadata=
+metadata=${IJ_LSP_METADATA_FILE:-"$state_dir/server-bundle.json"}
+extension_version_file="$state_dir/extension-version"
 
-metadata=$(find "$extension_root" -mindepth 2 -maxdepth 2 -type f \
-  -path '*/jetbrains.intellij-server-*/server-bundle.json' -printf '%T@ %p\n' 2>/dev/null \
-  | sort -nr | sed -n '1s/^[^ ]* //p')
+case "$(uname -m)" in
+  x86_64|amd64) target_platform=linux-x64 ;;
+  aarch64|arm64) target_platform=linux-arm64 ;;
+  *)
+    printf 'ERROR: unsupported architecture: %s\n' "$(uname -m)" >&2
+    exit 1
+    ;;
+esac
 
-if [ -z "$metadata" ]; then
-  printf '%s\n' 'ERROR: JetBrains.intellij-server is installed, but server-bundle.json was not found.' >&2
-  printf '%s\n' 'Try: code-server --install-extension JetBrains.intellij-server --force' >&2
+mkdir -p "$state_dir" "$servers_dir"
+exec 9>"$state_dir/install.lock"
+if ! flock -w 1800 9; then
+  printf '%s\n' 'ERROR: timed out waiting for another IntelliJ installation.' >&2
   exit 1
 fi
 
-bundle=$(ij-node -e '
+fetch_metadata() {
+  [ -s "$metadata" ] && return 0
+  [ -z "${IJ_LSP_METADATA_FILE:-}" ] || {
+    printf 'ERROR: IJ_LSP_METADATA_FILE does not exist or is empty: %s\n' "$metadata" >&2
+    exit 1
+  }
+
+  tmp_dir=$(mktemp -d "$state_dir/.metadata.XXXXXX")
+  trap 'rm -rf -- "$tmp_dir"' EXIT HUP INT TERM
+  api="https://open-vsx.org/api/JetBrains/intellij-server/$target_platform/latest"
+  registry="$tmp_dir/registry.json"
+
+  printf 'Resolving the latest IntelliJ server for %s...\n' "$target_platform" >&2
+  curl --fail --location --silent --show-error --retry 3 --retry-all-errors "$api" -o "$registry"
+  registry_values=$(node -e '
+const fs = require("fs");
+const value = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+if (value.namespace !== "JetBrains" || value.name !== "intellij-server") throw new Error("unexpected Open VSX extension identity");
+if (value.targetPlatform !== process.argv[2]) throw new Error("unexpected Open VSX target platform");
+if (!/^\d+\.\d+\.\d+(?:[-.][A-Za-z0-9.-]+)?$/.test(value.version || "")) throw new Error("invalid extension version");
+const prefix = `https://open-vsx.org/api/JetBrains/intellij-server/${process.argv[2]}/`;
+for (const key of ["download", "sha256"]) {
+  if (!(value.files?.[key] || "").startsWith(prefix)) throw new Error(`unexpected Open VSX ${key} URL`);
+}
+process.stdout.write([value.version, value.files.download, value.files.sha256].join("\n"));
+' "$registry" "$target_platform")
+  extension_version=$(printf '%s\n' "$registry_values" | sed -n '1p')
+  vsix_url=$(printf '%s\n' "$registry_values" | sed -n '2p')
+  vsix_sha_url=$(printf '%s\n' "$registry_values" | sed -n '3p')
+  vsix="$tmp_dir/intellij-server.vsix"
+
+  curl --fail --location --silent --show-error --retry 3 --retry-all-errors "$vsix_sha_url" -o "$tmp_dir/vsix.sha256"
+  vsix_sha=$(tr -d '[:space:]' < "$tmp_dir/vsix.sha256")
+  printf '%s' "$vsix_sha" | grep -Eq '^[a-fA-F0-9]{64}$' || {
+    printf '%s\n' 'ERROR: Open VSX returned an invalid extension checksum.' >&2
+    exit 1
+  }
+  curl --fail --location --silent --show-error --retry 3 --retry-all-errors "$vsix_url" -o "$vsix"
+  printf '%s  %s\n' "$vsix_sha" "$vsix" | sha256sum -c - >&2
+  unzip -p "$vsix" extension/server-bundle.json > "$tmp_dir/server-bundle.json"
+  [ -s "$tmp_dir/server-bundle.json" ] || {
+    printf '%s\n' 'ERROR: the JetBrains VSIX does not contain server-bundle.json.' >&2
+    exit 1
+  }
+  mv "$tmp_dir/server-bundle.json" "$metadata"
+  printf '%s\n' "$extension_version" > "$extension_version_file"
+  chmod 0600 "$metadata" "$extension_version_file"
+  rm -rf -- "$tmp_dir"
+  trap - EXIT HUP INT TERM
+}
+
+fetch_metadata
+
+bundle=$(node -e '
 const fs = require("fs");
 const value = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
 if (!/^https:\/\/(download|download-cdn)\.jetbrains\.com\//.test(value.url || "")) throw new Error("unexpected server URL");
@@ -32,7 +91,6 @@ version=$(printf '%s\n' "$bundle" | sed -n '2p')
 archive_name=$(printf '%s\n' "$bundle" | sed -n '3p')
 sha256=$(printf '%s\n' "$bundle" | sed -n '4p')
 install_dir="$servers_dir/$version"
-mkdir -p "$state_dir"
 
 find_launcher() {
   if [ -x "$install_dir/bin/intellij-server" ]; then
@@ -42,24 +100,52 @@ find_launcher() {
   find "$install_dir" -mindepth 2 -maxdepth 3 -type f -path '*/bin/intellij-server' -perm -u+x -print -quit 2>/dev/null
 }
 
-launcher=$(find_launcher || true)
-if [ -n "$launcher" ]; then
+publish_current() {
+  launcher=$(find_launcher || true)
+  [ -n "$launcher" ] || return 1
   ln -sfn "$install_dir" "$state_dir/current"
+  extension_version=$(sed -n '1p' "$extension_version_file" 2>/dev/null || true)
+  node -e '
+const fs = require("fs");
+const value = { extensionVersion: process.argv[2] || null, serverVersion: process.argv[3], targetPlatform: process.argv[4] };
+fs.writeFileSync(process.argv[1], `${JSON.stringify(value)}\n`, { mode: 0o600 });
+' "$state_dir/server-info.json" "$extension_version" "$version" "$target_platform"
   printf '%s\n' "$launcher"
+}
+
+if publish_current; then
   exit 0
 fi
 
-mkdir -p "$servers_dir"
-tmp_dir=$(mktemp -d "$servers_dir/.ij-install.XXXXXX")
-trap 'rm -rf -- "$tmp_dir"' EXIT HUP INT TERM
-archive="$tmp_dir/$archive_name"
+downloads_dir="$servers_dir/.downloads"
+mkdir -p "$downloads_dir"
+archive="$downloads_dir/$archive_name.part"
 
-printf 'Downloading IntelliJ language server %s (about 1 GB)...\n' "$version" >&2
-curl --fail --location --show-error --silent "$url" -o "$archive"
-printf '%s  %s\n' "$sha256" "$archive" | sha256sum -c - >&2
+download_archive() {
+  printf 'Downloading IntelliJ server %s (about 1 GB; interrupted downloads resume)...\n' "$version" >&2
+  if ! curl --fail --location --show-error --retry 3 --retry-all-errors --continue-at - "$url" -o "$archive"; then
+    printf '%s\n' 'Resume was unavailable; retrying the verified download from the beginning.' >&2
+    fresh="$downloads_dir/$archive_name.fresh.$$"
+    curl --fail --location --show-error --retry 3 --retry-all-errors "$url" -o "$fresh"
+    mv "$fresh" "$archive"
+  fi
+}
+
+if ! printf '%s  %s\n' "$sha256" "$archive" | sha256sum -c - >/dev/null 2>&1; then
+  download_archive
+fi
+if ! printf '%s  %s\n' "$sha256" "$archive" | sha256sum -c - >&2; then
+  bad="$downloads_dir/$archive_name.bad.$(date +%s)"
+  mv "$archive" "$bad"
+  printf 'Checksum failed; quarantined the download as %s and retrying once.\n' "$bad" >&2
+  download_archive
+  printf '%s  %s\n' "$sha256" "$archive" | sha256sum -c - >&2
+fi
+
+tmp_dir=$(mktemp -d "$servers_dir/.ij-install.$version.XXXXXX")
+trap 'rm -rf -- "$tmp_dir"' EXIT HUP INT TERM
 mkdir -p "$tmp_dir/unpacked"
 tar -xzf "$archive" -C "$tmp_dir/unpacked"
-
 extracted=$(find "$tmp_dir/unpacked" -type f -path '*/bin/intellij-server' -print -quit)
 if [ -z "$extracted" ]; then
   printf '%s\n' 'ERROR: downloaded archive does not contain bin/intellij-server.' >&2
@@ -67,11 +153,19 @@ if [ -z "$extracted" ]; then
 fi
 chmod 0755 "$extracted"
 extracted_root=$(dirname "$(dirname "$extracted")")
-mv "$extracted_root" "$install_dir"
-ln -sfn "$install_dir" "$state_dir/current"
-launcher=$(find_launcher || true)
-if [ -z "$launcher" ]; then
+staged="$servers_dir/.$version.ready.$$"
+mv "$extracted_root" "$staged"
+if [ -e "$install_dir" ]; then
+  quarantine="$servers_dir/.$version.incomplete.$(date +%s)"
+  mv "$install_dir" "$quarantine"
+  printf 'Moved an incomplete prior installation to %s.\n' "$quarantine" >&2
+fi
+mv "$staged" "$install_dir"
+rm -f -- "$archive"
+rm -rf -- "$tmp_dir"
+trap - EXIT HUP INT TERM
+
+if ! publish_current; then
   printf '%s\n' 'ERROR: IntelliJ server launcher disappeared after installation.' >&2
   exit 1
 fi
-printf '%s\n' "$launcher"

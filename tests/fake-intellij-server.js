@@ -5,7 +5,8 @@ let buffer = Buffer.alloc(0);
 
 const args = process.argv.slice(2);
 const eulaIndex = args.indexOf('--eula');
-if (!args.includes('--stdio') || !args.includes('--system-path') || eulaIndex < 0 || args[eulaIndex + 1] !== 'fake-eula') {
+const eula = args[eulaIndex + 1] || '';
+if (!args.includes('--stdio') || !args.includes('--system-path') || eulaIndex < 0 || (eula !== 'fake-eula' && !/^[a-f0-9]{16}$/.test(eula))) {
   console.error(`unexpected launcher arguments: ${JSON.stringify(args)}`);
   process.exit(2);
 }

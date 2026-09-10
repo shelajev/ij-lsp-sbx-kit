@@ -2,36 +2,80 @@
 set -eu
 
 state_dir=${IJ_LSP_STATE_DIR:-"$HOME/.local/share/ij-lsp"}
-socket=${IJ_LSP_SOCKET:-/tmp/ij-lsp-agent.sock}
-daemon="$HOME/.local/lib/ij-lsp/daemon.js"
+daemon=${IJ_LSP_DAEMON:-"$HOME/.local/lib/ij-lsp/daemon.js"}
+version=0.7.0
+raw=false
+limit=100
 
 usage() {
   cat <<'EOF'
 Usage:
-  ij status
-  ij wait [seconds]
+  ij [--raw] [--limit N] ready [seconds]
+  ij [--raw] [--limit N] status
+  ij doctor
+  ij prepare
   ij accept-license
   ij symbols <query>
   ij outline <file>
   ij diagnostics <file>
-  ij definition <file> <line> <column>
-  ij type-definition <file> <line> <column>
-  ij implementation <file> <line> <column>
-  ij references <file> <line> <column>
-  ij hover <file> <line> <column>
-  ij code-actions <file> <line> <column>
-  ij rename-preview <file> <line> <column> <new-name>
+  ij definition|type-definition|implementation|references|hover <file>:<line>:<column>
+  ij code-actions <file>:<line>:<column>
+  ij rename-preview <file>:<line>:<column> <new-name>
 
-Lines and columns are 1-based. Results are JSON. Query operations never edit files.
-VS Code and a browser are not required.
+Position commands also accept separate <file> <line> <column> arguments.
+Lines and columns are 1-based. Results are compact JSON unless --raw is used.
+Query operations never edit files. No editor or browser is required.
 EOF
 }
 
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --version) printf 'ij %s\n' "$version"; exit 0 ;;
+    --raw) raw=true; shift ;;
+    --limit)
+      [ "$#" -ge 2 ] || { printf '%s\n' 'ERROR: --limit requires a value.' >&2; exit 2; }
+      limit=$2
+      shift 2
+      ;;
+    --limit=*) limit=${1#*=}; shift ;;
+    --) shift; break ;;
+    -*) printf 'Unknown option: %s\n\n' "$1" >&2; usage >&2; exit 2 ;;
+    *) break ;;
+  esac
+done
+case "$limit" in
+  ''|*[!0-9]*) printf '%s\n' 'ERROR: --limit must be an integer from 1 to 1000.' >&2; exit 2 ;;
+esac
+[ "$limit" -ge 1 ] && [ "$limit" -le 1000 ] || {
+  printf '%s\n' 'ERROR: --limit must be an integer from 1 to 1000.' >&2
+  exit 2
+}
+
+workspace_root() {
+  if root=$(git rev-parse --show-toplevel 2>/dev/null); then
+    (cd "$root" && pwd -P)
+  else
+    pwd -P
+  fi
+}
+
+root=$(workspace_root)
+workspace_id=$(printf '%s' "$root" | sha256sum | cut -c1-16)
+socket=${IJ_LSP_SOCKET:-"/tmp/ij-lsp-$(id -u)-$workspace_id.sock"}
+
 find_eula() {
-  find -L "$state_dir/current" -maxdepth 4 -type f -name EULA.txt -print -quit
+  find -L "$state_dir/current" -maxdepth 4 -type f -name EULA.txt -print -quit 2>/dev/null
 }
 
 accepted_hash() {
+  if [ -f "$state_dir/license-acceptance.json" ]; then
+    node -e '
+const fs = require("fs");
+const value = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+if (typeof value.eulaHash === "string") process.stdout.write(value.eulaHash);
+' "$state_dir/license-acceptance.json"
+    return
+  fi
   [ -f "$state_dir/accepted-eula-hash" ] || return 1
   sed -n '1p' "$state_dir/accepted-eula-hash"
 }
@@ -42,55 +86,62 @@ license_hash() {
   sha256sum "$eula" | cut -c1-16
 }
 
+record_acceptance() {
+  acceptance_method=$1
+  mkdir -p "$state_dir"
+  node -e '
+const fs = require("fs");
+const value = { eulaHash: process.argv[2], acceptedAt: new Date().toISOString(), method: process.argv[3] };
+fs.writeFileSync(process.argv[1], `${JSON.stringify(value)}\n`, { mode: 0o600 });
+' "$state_dir/license-acceptance.json" "$expected" "$acceptance_method"
+}
+
 install_server() {
   launcher=$($HOME/.local/bin/ij-server-install)
   [ -x "$launcher" ] || { printf '%s\n' 'ERROR: installer returned no executable launcher.' >&2; exit 1; }
 }
 
-require_license() {
+license_ready() {
   expected=$(license_hash || true)
   accepted=$(accepted_hash || true)
   if [ -n "$expected" ] && [ "$accepted" != "$expected" ] && [ "${IJ_LSP_ACCEPT_LICENSE:-false}" = true ]; then
-    printf '%s\n' 'Accepting the bundled JetBrains agreement from explicit kit argument.' >&2
-    mkdir -p "$state_dir"
-    printf '%s\n' "$expected" > "$state_dir/accepted-eula-hash"
-    chmod 0600 "$state_dir/accepted-eula-hash"
+    printf '%s\n' 'Recording JetBrains agreement acceptance from the explicit kit argument.' >&2
+    record_acceptance kit-argument
     accepted=$expected
   fi
-  if [ -z "$expected" ] || [ "$accepted" != "$expected" ]; then
+  [ -n "$expected" ] && [ "$accepted" = "$expected" ]
+}
+
+require_license() {
+  if ! license_ready; then
     printf '%s\n' '{"setupRequired":"license","message":"Run interactively: ij accept-license"}'
     exit 3
   fi
   eula_hash=$expected
 }
 
-workspace_root() {
-  if root=$(git rev-parse --show-toplevel 2>/dev/null); then
-    printf '%s\n' "$root"
-  else
-    pwd -P
-  fi
+socket_ready() {
+  [ -S "$socket" ] || return 1
+  status=$(curl --fail --silent --unix-socket "$socket" http://localhost/v1/status 2>/dev/null) || return 1
+  node -e '
+const value = JSON.parse(process.argv[1]);
+if (value.workspace !== process.argv[2]) process.exit(1);
+' "$status" "$root"
 }
 
 start_daemon() {
-  if [ -S "$socket" ] && curl --fail --silent --unix-socket "$socket" http://localhost/v1/status >/dev/null 2>&1; then
-    return 0
-  fi
+  socket_ready && return 0
   [ ! -e "$socket" ] || rm -f -- "$socket"
-  root=$(workspace_root)
   mkdir -p "$state_dir/logs"
-  workspace_id=$(printf '%s' "$root" | sha256sum | cut -c1-16)
   log="$state_dir/logs/$workspace_id.log"
-  nohup ij-node "$daemon" "$root" "$launcher" "$eula_hash" "$socket" >"$log" 2>&1 &
+  nohup node "$daemon" "$root" "$launcher" "$eula_hash" "$socket" >"$log" 2>&1 &
   attempts=0
   while [ "$attempts" -lt 60 ]; do
-    if [ -S "$socket" ] && curl --fail --silent --unix-socket "$socket" http://localhost/v1/status >/dev/null 2>&1; then
-      return 0
-    fi
+    if socket_ready; then return 0; fi
     sleep 1
     attempts=$((attempts + 1))
   done
-  printf 'ERROR: IntelliJ server did not start. Inspect %s\n' "$log" >&2
+  printf 'ERROR: IntelliJ bridge did not start. Inspect %s\n' "$log" >&2
   [ -f "$log" ] && tail -80 "$log" >&2
   exit 1
 }
@@ -101,14 +152,48 @@ request() {
   install_server
   require_license
   start_daemon
-  curl --fail-with-body --silent --show-error --unix-socket "$socket" --get "http://localhost$endpoint" "$@"
+  curl --fail-with-body --silent --show-error --unix-socket "$socket" --get "http://localhost$endpoint" \
+    --data-urlencode "raw=$raw" --data-urlencode "limit=$limit" "$@"
   printf '\n'
+}
+
+set_position() {
+  if [ "$#" -eq 1 ]; then
+    position_column=${1##*:}
+    position_rest=${1%:*}
+    position_line=${position_rest##*:}
+    position_file=${position_rest%:*}
+    [ "$position_file" != "$position_rest" ] || { usage >&2; exit 2; }
+  elif [ "$#" -eq 3 ]; then
+    position_file=$1
+    position_line=$2
+    position_column=$3
+  else
+    usage >&2
+    exit 2
+  fi
+}
+
+position_request() {
+  endpoint=$1
+  shift
+  set_position "$@"
+  request "$endpoint" --data-urlencode "file=$position_file" --data-urlencode "line=$position_line" --data-urlencode "column=$position_column"
 }
 
 command=${1:-help}
 if [ "$#" -gt 0 ]; then shift; fi
 
 case "$command" in
+  prepare)
+    [ "$#" -eq 0 ] || { usage >&2; exit 2; }
+    install_server
+    if license_ready; then
+      printf '%s\n' '{"prepared":true,"license":"accepted","serverStarted":false}'
+    else
+      printf '%s\n' '{"prepared":true,"setupRequired":"license","serverStarted":false}'
+    fi
+    ;;
   accept-license)
     [ "$#" -eq 0 ] || { usage >&2; exit 2; }
     install_server
@@ -119,12 +204,11 @@ case "$command" in
     printf '\nType yes to confirm that you have read and accept the JetBrains agreement: '
     read -r answer
     [ "$answer" = yes ] || { printf '%s\n' 'License was not accepted.' >&2; exit 1; }
-    mkdir -p "$state_dir"
-    license_hash > "$state_dir/accepted-eula-hash"
-    chmod 0600 "$state_dir/accepted-eula-hash"
-    printf '%s\n' 'JetBrains agreement accepted. Run: ij wait 300'
+    expected=$(license_hash)
+    record_acceptance interactive
+    printf '%s\n' 'JetBrains agreement accepted. Run: ij ready 300'
     ;;
-  status)
+  status|doctor)
     [ "$#" -eq 0 ] || { usage >&2; exit 2; }
     install_server
     require_license
@@ -132,7 +216,7 @@ case "$command" in
     curl --fail-with-body --silent --show-error --unix-socket "$socket" http://localhost/v1/status
     printf '\n'
     ;;
-  wait)
+  ready|wait)
     [ "$#" -le 1 ] || { usage >&2; exit 2; }
     request /v1/wait --data-urlencode "seconds=${1:-300}"
     ;;
@@ -145,12 +229,24 @@ case "$command" in
     request "/v1/$command" --data-urlencode "file=$1"
     ;;
   definition|type-definition|implementation|references|hover|code-actions)
-    [ "$#" -eq 3 ] || { usage >&2; exit 2; }
-    request "/v1/$command" --data-urlencode "file=$1" --data-urlencode "line=$2" --data-urlencode "column=$3"
+    position_request "/v1/$command" "$@"
     ;;
+  def) position_request /v1/definition "$@" ;;
+  refs) position_request /v1/references "$@" ;;
   rename-preview)
-    [ "$#" -eq 4 ] || { usage >&2; exit 2; }
-    request /v1/rename-preview --data-urlencode "file=$1" --data-urlencode "line=$2" --data-urlencode "column=$3" --data-urlencode "newName=$4"
+    if [ "$#" -eq 2 ]; then
+      location=$1
+      new_name=$2
+      set_position "$location"
+    elif [ "$#" -eq 4 ]; then
+      new_name=$4
+      set_position "$1" "$2" "$3"
+    else
+      usage >&2
+      exit 2
+    fi
+    request /v1/rename-preview --data-urlencode "file=$position_file" --data-urlencode "line=$position_line" \
+      --data-urlencode "column=$position_column" --data-urlencode "newName=$new_name"
     ;;
   help|-h|--help) usage ;;
   *) printf 'Unknown command: %s\n\n' "$command" >&2; usage >&2; exit 2 ;;

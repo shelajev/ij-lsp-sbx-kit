@@ -7,7 +7,9 @@ const fs = require('fs');
 const http = require('http');
 const os = require('os');
 const path = require('path');
-const { pathToFileURL } = require('url');
+const { fileURLToPath, pathToFileURL } = require('url');
+
+const bridgeVersion = '0.7.0';
 
 const [workspaceArg, launcher, eulaHash, socketPath = '/tmp/ij-lsp-agent.sock'] = process.argv.slice(2);
 if (!workspaceArg || !launcher || !eulaHash) {
@@ -76,6 +78,8 @@ class LspClient {
     this.readyParams = null;
     this.progress = new Map();
     this.exited = false;
+    this.startPromise = null;
+    this.startError = null;
   }
 
   async start() {
@@ -109,7 +113,7 @@ class LspClient {
 
     await this.request('initialize', {
       processId: process.pid,
-      clientInfo: { name: 'ij-agent-bridge', version: '0.4.0' },
+      clientInfo: { name: 'ij-agent-bridge', version: bridgeVersion },
       locale: 'en',
       rootPath: workspace,
       rootUri,
@@ -146,6 +150,12 @@ class LspClient {
     }, 120000);
     this.notify('initialized', {});
     this.initialized = true;
+  }
+
+  async ready() {
+    if (!this.startPromise) throw new Error('IntelliJ startup has not begun');
+    await this.startPromise;
+    if (this.startError) throw this.startError;
   }
 
   send(message) {
@@ -281,6 +291,11 @@ class LspClient {
 
 const lsp = new LspClient();
 
+let serverInfo = {};
+try {
+  serverInfo = JSON.parse(fs.readFileSync(path.join(stateRoot, 'server-info.json'), 'utf8'));
+} catch (_) {}
+
 function json(response, status, value) {
   const body = JSON.stringify(value);
   response.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'content-length': Buffer.byteLength(body) });
@@ -302,6 +317,48 @@ function position(query) {
   return { line: line - 1, character: character - 1 };
 }
 
+function compactUri(uri) {
+  if (typeof uri !== 'string' || !uri.startsWith('file:')) return uri;
+  try {
+    const file = fileURLToPath(uri);
+    const relative = path.relative(workspace, file);
+    if (relative === '') return '.';
+    if (!relative.startsWith(`..${path.sep}`) && relative !== '..' && !path.isAbsolute(relative)) return relative;
+    return file;
+  } catch (_) {
+    return uri;
+  }
+}
+
+function compact(value) {
+  if (Array.isArray(value)) return value.map(compact);
+  if (!value || typeof value !== 'object') return value;
+  if (Number.isInteger(value.line) && Number.isInteger(value.character)) {
+    const result = { ...value, line: value.line + 1, column: value.character + 1 };
+    delete result.character;
+    return result;
+  }
+  const result = {};
+  for (const [key, child] of Object.entries(value)) {
+    if ((key === 'uri' || key === 'targetUri') && typeof child === 'string') result[key] = compactUri(child);
+    else if (key === 'changes' && child && typeof child === 'object' && !Array.isArray(child)) {
+      result[key] = Object.fromEntries(Object.entries(child).map(([uri, edits]) => [compactUri(uri), compact(edits)]));
+    } else result[key] = compact(child);
+  }
+  return result;
+}
+
+function presented(query, value) {
+  if (query.get('raw') === 'true') return value;
+  let result = compact(value);
+  if (Array.isArray(result)) {
+    const requested = Number(query.get('limit') || 100);
+    const limit = Number.isInteger(requested) ? Math.min(1000, Math.max(1, requested)) : 100;
+    result = result.slice(0, limit);
+  }
+  return result;
+}
+
 async function textRequest(query, method, extra = {}) {
   const document = await lsp.document(required(query, 'file'));
   return lsp.request(method, { textDocument: { uri: document.uri }, position: position(query), ...extra });
@@ -315,7 +372,11 @@ async function route(request, response) {
     if (url.pathname === '/v1/status') {
       return json(response, 200, {
         server: 'intellij',
-        pid: lsp.child.pid,
+        bridgeVersion,
+        ...serverInfo,
+        state: lsp.startError ? 'error' : lsp.initialized ? 'ready' : 'starting',
+        error: lsp.startError?.message || null,
+        pid: lsp.child?.pid || null,
         workspace,
         initialized: lsp.initialized,
         indexed: lsp.indexed,
@@ -324,6 +385,7 @@ async function route(request, response) {
       });
     }
     if (url.pathname === '/v1/wait') {
+      await lsp.ready();
       const requestedSeconds = Number(query.get('seconds') || 300);
       if (!Number.isFinite(requestedSeconds)) throw new Error('seconds must be a number');
       const seconds = Math.min(1800, Math.max(1, requestedSeconds));
@@ -331,17 +393,18 @@ async function route(request, response) {
       while (!lsp.indexed && !lsp.exited && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 1000));
       return json(response, lsp.indexed ? 200 : 202, { indexed: lsp.indexed, waitedSeconds: seconds, ready: lsp.readyParams });
     }
-    if (url.pathname === '/v1/symbols') return json(response, 200, await lsp.request('workspace/symbol', { query: required(query, 'query') }));
+    await lsp.ready();
+    if (url.pathname === '/v1/symbols') return json(response, 200, presented(query, await lsp.request('workspace/symbol', { query: required(query, 'query') })));
     if (url.pathname === '/v1/outline') {
       const document = await lsp.document(required(query, 'file'));
-      return json(response, 200, await lsp.request('textDocument/documentSymbol', { textDocument: { uri: document.uri } }));
+      return json(response, 200, presented(query, await lsp.request('textDocument/documentSymbol', { textDocument: { uri: document.uri } })));
     }
     if (url.pathname === '/v1/diagnostics') {
       const document = await lsp.document(required(query, 'file'));
       try {
-        return json(response, 200, await lsp.request('textDocument/diagnostic', { textDocument: { uri: document.uri } }));
+        return json(response, 200, presented(query, await lsp.request('textDocument/diagnostic', { textDocument: { uri: document.uri } })));
       } catch (_) {
-        return json(response, 200, { kind: 'full', items: lsp.diagnostics.get(document.uri) || [] });
+        return json(response, 200, presented(query, { kind: 'full', items: lsp.diagnostics.get(document.uri) || [] }));
       }
     }
     const methods = {
@@ -350,16 +413,16 @@ async function route(request, response) {
       '/v1/implementation': 'textDocument/implementation',
       '/v1/hover': 'textDocument/hover',
     };
-    if (methods[url.pathname]) return json(response, 200, await textRequest(query, methods[url.pathname]));
+    if (methods[url.pathname]) return json(response, 200, presented(query, await textRequest(query, methods[url.pathname])));
     if (url.pathname === '/v1/references') {
-      return json(response, 200, await textRequest(query, 'textDocument/references', { context: { includeDeclaration: true } }));
+      return json(response, 200, presented(query, await textRequest(query, 'textDocument/references', { context: { includeDeclaration: true } })));
     }
     if (url.pathname === '/v1/code-actions') {
       const pos = position(query);
       const document = await lsp.document(required(query, 'file'));
-      return json(response, 200, await lsp.request('textDocument/codeAction', {
+      return json(response, 200, presented(query, await lsp.request('textDocument/codeAction', {
         textDocument: { uri: document.uri }, range: { start: pos, end: pos }, context: { diagnostics: lsp.diagnostics.get(document.uri) || [] },
-      }));
+      })));
     }
     if (url.pathname === '/v1/rename-preview') {
       const document = await lsp.document(required(query, 'file'));
@@ -369,7 +432,7 @@ async function route(request, response) {
       const edit = await lsp.request('textDocument/rename', {
         textDocument: { uri: document.uri }, position: pos, newName: required(query, 'newName'),
       });
-      return json(response, 200, { prepare, edit });
+      return json(response, 200, presented(query, { prepare, edit }));
     }
     return json(response, 404, { error: 'unknown endpoint' });
   } catch (error) {
@@ -379,10 +442,19 @@ async function route(request, response) {
 }
 
 async function main() {
-  await lsp.start();
   if (fs.existsSync(socketPath)) fs.unlinkSync(socketPath);
   const server = http.createServer((request, response) => void route(request, response));
-  server.listen(socketPath, () => fs.chmodSync(socketPath, 0o600));
+  await new Promise((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(socketPath, () => {
+      fs.chmodSync(socketPath, 0o600);
+      resolve();
+    });
+  });
+  lsp.startPromise = lsp.start().catch(error => {
+    lsp.startError = error;
+    console.error(error.stack || error.message);
+  });
   const stop = () => {
     try { lsp.notify('exit'); } catch (_) {}
     try { lsp.child.kill('SIGTERM'); } catch (_) {}
