@@ -1,0 +1,88 @@
+name: Publish Docker Hub kit
+
+# Publication runs only on pushes to main: no PR, tag, schedule or manual triggers.
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: docker-hub-main
+  cancel-in-progress: false
+
+env:
+  DOCKERHUB_USERNAME: olegselajev241
+  KIT_IMAGE: docker.io/olegselajev241/ij-lsp
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Node.js for smoke tests
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22"
+          package-manager-cache: false
+
+      - name: Test headless bridge
+        run: ./tests/smoke.sh
+
+      - name: Read kit version
+        id: version
+        shell: bash
+        run: |
+          version="$(sed -n 's/^version: //p' ij-lsp.yaml)"
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            printf 'Invalid kit version: %s\n' "$version" >&2
+            exit 1
+          fi
+          printf 'value=%s\n' "$version" >> "$GITHUB_OUTPUT"
+
+      - name: Set up architecture emulation
+        uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+        with:
+          platforms: arm64
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          username: ${{ env.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and publish v3 kit
+        id: publish
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: ij-lsp.yaml
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ${{ env.KIT_IMAGE }}:${{ steps.version.outputs.value }}
+            ${{ env.KIT_IMAGE }}:latest
+            ${{ env.KIT_IMAGE }}:sha-${{ github.sha }}
+          provenance: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Verify published platforms
+        env:
+          KIT_DIGEST: ${{ steps.publish.outputs.digest }}
+        run: |
+          docker buildx imagetools inspect "$KIT_IMAGE@$KIT_DIGEST" --raw > /tmp/kit-index.json
+          node -e '
+          const value = JSON.parse(require("fs").readFileSync("/tmp/kit-index.json", "utf8"));
+          for (const architecture of ["amd64", "arm64"]) {
+            if (!value.manifests?.some(m => m.platform?.os === "linux" && m.platform.architecture === architecture)) {
+              throw new Error("Published kit is missing linux/" + architecture);
+            }
+          }
+          '

@@ -1,0 +1,7 @@
+# Allow only the kit's authored build inputs; exclude Git, secrets and downloads.
+**
+!ij-lsp.yaml
+!ij-lsp.dockerfile
+!ij-lsp-context.md
+!files/
+!files/**

@@ -1,7 +1,7 @@
 # ij-lsp
 
-A headless Docker Sandbox kit that gives coding agents IntelliJ-powered Java
-and Kotlin intelligence through one small `ij` command. It supports symbols,
+A headless Docker Sandbox v3 mixin kit that gives coding agents
+IntelliJ-powered Java and Kotlin intelligence through one small `ij` command. It supports symbols,
 navigation, references, hover, diagnostics, code-action previews, and rename
 previews without VS Code, a browser, MCP discovery, or an open port.
 
@@ -12,7 +12,12 @@ product.
 
 ## Quick start
 
-Allow kits from this GitHub account once:
+Use an sbx release with Kits v3 support and a v3 agent workload. Older built-in
+templates may fail with `no workload kit in the set`; in that case, supply a
+v3 workload reference in place of `codex`. `SBX_AGENT` accepts that reference
+when using `run.sh`.
+
+Allow Docker Hub and this GitHub account as kit sources once:
 
 ```bash
 sbx settings set kit.allowedSources '["docker.io/","github.com/shelajev/"]'
@@ -22,8 +27,8 @@ Create a named sandbox for a Java or Kotlin project:
 
 ```bash
 sbx create --name ij-lsp-codex codex \
-  --kit "git+https://github.com/shelajev/ij-lsp-sbx-kit.git" \
-  --kit-arg ij-lsp.accept-license=true \
+  --kit docker.io/olegselajev241/ij-lsp:0.7.0 \
+  --kit-arg acceptLicense=true \
   ~/my-jvm-project
 ```
 
@@ -33,11 +38,13 @@ Once creation finishes, attach the agent:
 sbx run --name ij-lsp-codex
 ```
 
+The v3 argument is named `acceptLicense` (the v2 spelling was `accept-license`).
 The kit argument is an explicit opt-in to JetBrains' bundled agreement. Omit
 it to review and accept the agreement interactively instead.
 
-On first creation, the kit downloads and checksum-verifies the approximately
-1 GB platform-specific IntelliJ server. There is no code-server installation,
+On first creation, the kit begins downloading and checksum-verifying the
+approximately 1 GB platform-specific IntelliJ server in the background.
+The first `ij ready` waits for installation through the shared installer lock. There is no code-server installation,
 VS Code extension host, browser process, or editor download. Restarting the
 same named sandbox reuses the server and indexes already stored in it.
 
@@ -53,12 +60,14 @@ Run `ij ready 300` now. Then prefer `ij symbols`, `ij outline`, `ij definition`,
 not look for MCP, jdtls, VS Code, a browser, or another LSP.
 ```
 
-`ij ready 300` starts IntelliJ only after the repository is present, then waits
-for JetBrains' project-import and indexing-ready notification.
+`ij ready 300` waits for installation, starts IntelliJ only after the repository
+is present, then waits for JetBrains' project-import and indexing-ready
+notification. The timeout of 300 seconds bounds indexing; installation has
+its own installer lock timeout.
 
 ## Manual license acceptance
 
-Without `--kit-arg ij-lsp.accept-license=true`, accept interactively:
+Without `--kit-arg acceptLicense=true`, accept interactively:
 
 ```bash
 sbx exec -it ij-lsp-codex -- ij accept-license
@@ -118,24 +127,24 @@ operations into Language Server Protocol requests over a user-only,
 workspace-specific Unix socket. Each workspace has an isolated IntelliJ system
 directory and index. No network service is exposed.
 
-The Markdown note for sandbox agents is `agentInstructions.content` in
-`spec.yaml`; Docker writes it into the sandbox's kit memory at creation time.
+The Markdown note for sandbox agents is [ij-lsp-context.md](ij-lsp-context.md),
+referenced by the `agent-context@1` capability in [ij-lsp.yaml](ij-lsp.yaml).
+Docker stages it in the kit image and indexes it in the agent's kit memory.
 
 ## Test the published kit
 
-Validate and inspect it:
+Inspect its resolved v3 declarations:
 
 ```bash
-sbx kit validate "git+https://github.com/shelajev/ij-lsp-sbx-kit.git"
-sbx kit inspect "git+https://github.com/shelajev/ij-lsp-sbx-kit.git"
+sbx kit inspect docker.io/olegselajev241/ij-lsp:0.7.0
 ```
 
 Then exercise a real project:
 
 ```bash
 sbx create --name ij-lsp-test codex \
-  --kit "git+https://github.com/shelajev/ij-lsp-sbx-kit.git" \
-  --kit-arg ij-lsp.accept-license=true \
+  --kit docker.io/olegselajev241/ij-lsp:0.7.0 \
+  --kit-arg acceptLicense=true \
   ~/my-jvm-project
 
 sbx exec ij-lsp-test -- ij ready 300
@@ -156,18 +165,52 @@ sbx policy log ij-lsp-test
 
 ## Test a local checkout
 
-The fast smoke test uses a fake LSP server:
+The fast smoke test uses a fake LSP server and the Linux tools listed below:
 
 ```bash
 ./tests/smoke.sh
 ```
 
-For Docker Sandbox validation and a real-project run:
+On macOS, run it in a Linux container:
 
 ```bash
-sbx kit validate .
+docker run --rm --entrypoint bash -v "$PWD:/kit:ro" -w /kit \
+  docker/sandbox-templates:shell-docker ./tests/smoke.sh
+```
+
+The v3 descriptor is `ij-lsp.yaml`; its companion recipe
+`ij-lsp.dockerfile` ships the bridge as an OCI overlay. The workload must
+already provide Node.js, curl, tar, unzip, sha256sum, and flock. The install
+hook checks these tools and reports any missing dependency.
+
+Validate and build both supported platforms, then check the OCI artifact:
+
+```bash
+docker buildx build . -f ij-lsp.yaml --output type=cacheonly
+docker buildx build . -f ij-lsp.yaml --platform linux/amd64,linux/arm64 \
+  -t ij-lsp:0.7.0 --output type=oci,dest=/tmp/ij-lsp-layout,tar=false
+kit-tck validate --layout /tmp/ij-lsp-layout 0.7.0
+```
+
+Install `kit-tck` from the matching platform archive on the
+[sandbox-kit-spec releases page](https://github.com/docker/sandbox-kit-spec/releases).
+`sbx kit validate` does not support v3 source kits; the BuildKit frontend
+validates the descriptor during the build instead.
+
+Inspect and run the local source kit (sbx builds it on demand):
+
+```bash
 sbx kit inspect .
 ./run.sh ij-lsp-test ~/my-jvm-project
+```
+
+`run.sh` leaves license acceptance interactive. To opt in explicitly when
+creating a local sandbox, use:
+
+```bash
+sbx create --name ij-lsp-local codex --kit "$PWD" \
+  --kit-arg acceptLicense=true ~/my-jvm-project
+sbx run --name ij-lsp-local
 ```
 
 Use another agent template with `SBX_AGENT`, for example:
@@ -176,15 +219,47 @@ Use another agent template with `SBX_AGENT`, for example:
 SBX_AGENT=claude ./run.sh ij-lsp-claude ~/my-jvm-project
 ```
 
+## Publish the v3 kit
+
+The kit is one OCI image containing the descriptor, bridge, and agent context.
+[The publishing workflow](.github/workflows/publish.yml) runs only on pushes
+to `main`. It runs the smoke test, builds amd64 and arm64 together, and pushes
+`olegselajev241/ij-lsp` to Docker Hub with the descriptor's version, `latest`,
+and `sha-<commit>` tags. PRs, other branches, tags, schedules, and manual events
+have no workflow trigger.
+
+The workflow uses the repository Actions secret `DOCKERHUB_TOKEN` and the
+configured username `olegselajev241`. The token needs permission to push to
+that Docker Hub repository.
+
+To publish manually, build and push both platforms together:
+
+```bash
+docker buildx build . -f ij-lsp.yaml --platform linux/amd64,linux/arm64 \
+  -t docker.io/olegselajev241/ij-lsp:0.7.0 \
+  -t docker.io/olegselajev241/ij-lsp:latest --push
+```
+
+Consumers can compose the published image onto an agent:
+
+```bash
+sbx create --name ij-lsp-codex codex \
+  --kit docker.io/olegselajev241/ij-lsp:0.7.0 ~/my-jvm-project
+```
+
 ## Versioning and network access
 
 A fresh sandbox resolves the latest platform-specific JetBrains extension
 metadata because preview server builds can expire. That resolved metadata and
 server version remain fixed for the lifetime of the named sandbox.
 
-The allowlist covers Open VSX plus JetBrains download, legal, and activation
-endpoints. Maven, Gradle, Bazel, or project-specific repositories may require
-additional policy entries.
+The runtime allowlist covers Open VSX plus JetBrains download, legal, and
+activation endpoints. Startup hooks explicitly receive the license argument
+and sandbox proxy environment so their downloads use the same network policy.
+Prefetch runs as a background startup hook because the approximately 1 GB
+download can exceed the runtime's foreground startup deadline.
+Maven, Gradle, Bazel, or project-specific repositories may require additional
+policy entries.
 
 JetBrains currently describes this integration as a trial requiring IntelliJ
 IDEA Ultimate afterward. Review its

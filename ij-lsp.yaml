@@ -1,0 +1,79 @@
+# syntax=docker/sandbox-kit:3
+schemaVersion: "3"
+kind: mixin
+version: 0.7.0
+displayName: Java and Kotlin by IntelliJ IDEA
+description: Adds fast, headless IntelliJ-powered Java and Kotlin queries for coding agents.
+sourceUrl: https://github.com/shelajev/ij-lsp-sbx-kit
+licenses:
+  - Apache-2.0
+
+args:
+  # MIGRATION NOTE: v3 argument names cannot contain hyphens.
+  acceptLicense:
+    default: "false"
+    description: Explicitly accept the JetBrains server agreement during sandbox startup
+    enum: ["false", "true"]
+    env: IJ_LSP_ACCEPT_LICENSE
+
+# No requires: Node may be installed outside the workload's package database.
+# Retain the tool probe so incompatible bases fail with an actionable error.
+# No IntelliJ provide: its preview release is resolved at sandbox creation,
+# and is independent of the bridge/kit release above.
+capabilities:
+  - type: com.docker.sandbox/network-policy@1
+    config:
+      # Downloads happen during startup and later ij queries, not install.
+      runtime:
+        allow:
+          # Open VSX metadata and the small platform VSIX used only as a
+          # checksummed source of JetBrains' server-bundle.json manifest.
+          - open-vsx.org
+          - openvsx.eclipsecontent.org
+
+          # IntelliJ language-server bootstrap, updates, and licensing.
+          - resources.jetbrains.com
+          - download.jetbrains.com
+          - download-cdn.jetbrains.com
+          - cache-redirector.jetbrains.com
+          - account.jetbrains.com
+          - plugins.jetbrains.com
+          - www.jetbrains.com
+
+  - type: com.docker.sandbox/lifecycle@1
+    config:
+      install:
+        - command: |
+            set -eu
+            for tool in node curl tar unzip sha256sum flock; do
+              command -v "$tool" >/dev/null || {
+                printf 'ERROR: ij-lsp requires %s in the sandbox base image.\n' "$tool" >&2
+                exit 1
+              }
+            done
+            node --version
+          description: Verify the small set of tools required by the headless bridge
+
+      startup:
+        # MIGRATION NOTE: the v2 chmod hook is unnecessary because the overlay
+        # now ships these files executable, with the correct agent ownership.
+        - command: [sh, -c, 'exec /home/agent/.local/bin/ij prepare >/dev/null']
+          user: "1000"
+          # MIGRATION NOTE: a 1 GB download can exceed the runtime's foreground
+          # startup deadline. ij queries wait on the installer's existing lock.
+          background: true
+          # v3 hooks receive only their declared env plus the platform baseline.
+          # curl in the child installer needs the sandbox's proxy configuration.
+          env:
+            - IJ_LSP_ACCEPT_LICENSE
+            - HTTP_PROXY
+            - HTTPS_PROXY
+            - NO_PROXY
+            - http_proxy
+            - https_proxy
+            - no_proxy
+          description: Prefetch and verify IntelliJ without starting it before the workspace is ready
+
+  - type: com.docker.sandbox/agent-context@1
+    config:
+      contentFile: ./ij-lsp-context.md
